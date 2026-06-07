@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // explorer is the state of the interactive disk browser. The stack is the path
@@ -23,6 +24,10 @@ type explorer struct {
 	tty    *os.File
 	sc     *scanner // reused by 'r' to rescan with the same settings
 	status string   // transient message shown in the footer until the next key
+
+	stale   bool   // current directory changed on disk since it was scanned
+	baseSig uint64 // fingerprint of the current dir at scan/rescan time
+	baseDir string // path the baseline fingerprint belongs to
 }
 
 // runTUI drives the interactive explorer on the controlling terminal. It always
@@ -62,17 +67,122 @@ func runTUI(root *Node, path string, sc *scanner) error {
 	sortChildren(root)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc}
 
-	buf := make([]byte, 16)
-	for {
-		e.render()
-		n, err := tty.Read(buf)
-		if err != nil || n == 0 {
-			return nil
+	// Read keys in a goroutine so the main loop can also wake on a timer to
+	// re-check whether the current directory changed on disk.
+	done := make(chan struct{})
+	defer close(done)
+	keys := make(chan []byte, 8)
+	go func() {
+		b := make([]byte, 16)
+		for {
+			n, err := tty.Read(b)
+			if n > 0 {
+				k := make([]byte, n)
+				copy(k, b[:n])
+				select {
+				case keys <- k:
+				case <-done:
+					return
+				}
+			}
+			if err != nil {
+				close(keys)
+				return
+			}
 		}
-		if e.handle(buf[:n]) {
-			return nil
+	}()
+
+	ticker := time.NewTicker(750 * time.Millisecond)
+	defer ticker.Stop()
+
+	e.ensureBaseline()
+	e.render()
+	for {
+		select {
+		case k, ok := <-keys:
+			if !ok {
+				return nil // terminal closed
+			}
+			if e.handle(k) {
+				return nil
+			}
+			e.ensureBaseline()
+			e.render()
+		case <-ticker.C:
+			if e.pollStale() {
+				e.render()
+			}
 		}
 	}
+}
+
+// ensureBaseline records the on-disk fingerprint of the current directory the
+// first time it is shown (and after a rescan), so later polls can tell whether
+// it has changed since.
+func (e *explorer) ensureBaseline() {
+	cur := e.cur()
+	if cur.Path != e.baseDir {
+		e.baseSig = dirSig(cur.Path)
+		e.baseDir = cur.Path
+		e.stale = false
+	}
+}
+
+// pollStale re-fingerprints the current directory and updates the stale flag,
+// reporting whether it changed so the caller can skip a needless redraw.
+// Detection is limited to the current level: additions, removals, and
+// size/mtime changes of immediate entries. Changes nested deeper are only seen
+// by rescanning ('r').
+func (e *explorer) pollStale() bool {
+	e.ensureBaseline()
+	was := e.stale
+	e.stale = dirSig(e.cur().Path) != e.baseSig
+	return e.stale != was
+}
+
+// dirSig is a cheap fingerprint of a directory's immediate contents — the
+// names, sizes, mtimes and kinds of its entries. It changes when an entry is
+// added, removed, or modified in place.
+func dirSig(path string) uint64 {
+	const (
+		offset = 14695981039346656037
+		prime  = 1099511628211
+	)
+	h := uint64(offset)
+	mixByte := func(b byte) { h ^= uint64(b); h *= prime }
+	mixStr := func(s string) {
+		for i := 0; i < len(s); i++ {
+			mixByte(s[i])
+		}
+	}
+	mixU64 := func(v uint64) {
+		for i := 0; i < 8; i++ {
+			mixByte(byte(v))
+			v >>= 8
+		}
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		mixStr("error:" + err.Error())
+		return h
+	}
+	for _, ent := range entries {
+		mixStr(ent.Name())
+		info, err := ent.Info()
+		if err != nil {
+			mixByte(0)
+			continue
+		}
+		mixU64(uint64(info.Size()))
+		mixU64(uint64(info.ModTime().UnixNano()))
+		if info.IsDir() {
+			mixByte('d')
+		} else {
+			mixByte('f')
+		}
+	}
+	return h
 }
 
 // cur is the directory currently shown.
@@ -193,6 +303,8 @@ func (e *explorer) rescan() {
 	if e.sel[depth] < 0 {
 		e.sel[depth] = 0
 	}
+	e.baseDir = "" // force a fresh staleness baseline for the rescanned dir
+	e.stale = false
 	e.status = "rescanned " + cur.Path
 }
 
@@ -271,9 +383,7 @@ func (e *explorer) render() {
 	var sb strings.Builder
 	sb.WriteString("\x1b[H")
 
-	head := fmt.Sprintf(" %s — %s · %s files · %s dirs",
-		cur.Path, humanize(cur.Size), comma(cur.Files), comma(cur.Dirs))
-	sb.WriteString("\x1b[7m" + fit(head, cols) + "\x1b[0m\r\n")
+	sb.WriteString("\x1b[7m" + fit(headLabel(cur, e.stale), cols) + "\x1b[0m\r\n")
 
 	for i := 0; i < body; i++ {
 		idx := off + i
@@ -302,6 +412,17 @@ func (e *explorer) render() {
 	sb.WriteString("\x1b[K\x1b[7m" + fit(foot, cols) + "\x1b[0m")
 
 	fmt.Fprint(e.tty, sb.String())
+}
+
+// headLabel is the top line for a directory: its path, totals, and a marker
+// when it has changed on disk since it was scanned.
+func headLabel(n *Node, stale bool) string {
+	s := fmt.Sprintf(" %s — %s · %s files · %s dirs",
+		n.Path, humanize(n.Size), comma(n.Files), comma(n.Dirs))
+	if stale {
+		s += "   ● changed on disk — press r"
+	}
+	return s
 }
 
 // rowText formats one entry padded to the full width so reverse-video selection

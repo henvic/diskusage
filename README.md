@@ -50,6 +50,12 @@ afterwards are not shown until you press `r`. `r` rescans the directory you are
 currently viewing — a full refresh at the root, or just the current subtree
 deeper in — and updates the totals all the way up.
 
+The explorer also watches the directory on screen and shows a `● changed on
+disk` marker in the header when its contents change (a file added, removed, or
+an immediate file growing). This check is shallow — it only covers the current
+level, not deeper subdirectories — so treat it as a nudge to press `r`, not a
+guarantee. It needs no external dependencies.
+
 ### Useful flags
 
 - `--apparent` — logical file size instead of disk blocks.

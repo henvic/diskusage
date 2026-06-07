@@ -136,6 +136,7 @@ Flags:
 Interactive keys (-i):
   ↑/↓ or j/k  move      →/Enter or l  open dir    ←/h/Esc  go up (back)
   r  rescan from disk   g/G  first/last           q or Ctrl-C  quit
+A ● in the header marks the current directory as changed on disk since scanned.
 
 Examples:
   diskusage                       breakdown of the current directory

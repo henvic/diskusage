@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -138,5 +139,56 @@ func TestExplorerRescan(t *testing.T) {
 	// The root total (an ancestor) must reflect the new file too.
 	if got := e.stack[0].Files; got != rootFiles+1 {
 		t.Fatalf("root files after subtree rescan = %d, want %d", got, rootFiles+1)
+	}
+}
+
+// TestExplorerStale checks the shallow stale indicator: a current-level change
+// is detected, an unchanged directory is not flagged, and a rescan clears it.
+func TestExplorerStale(t *testing.T) {
+	dir, err := os.MkdirTemp(".", "dutest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	writeFile(t, filepath.Join(dir, "a.txt"), 100)
+
+	sc := &scanner{apparent: true}
+	root, err := scan(dir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
+
+	e.ensureBaseline()
+	if e.stale {
+		t.Fatal("a freshly scanned directory should not be stale")
+	}
+	if e.pollStale() || e.stale {
+		t.Fatal("an unchanged directory must not be flagged stale")
+	}
+
+	// A new file at this level must be detected.
+	writeFile(t, filepath.Join(dir, "b.txt"), 200)
+	e.pollStale()
+	if !e.stale {
+		t.Fatal("added file was not detected as a change")
+	}
+
+	// Rescanning clears the indicator.
+	e.handle([]byte("r"))
+	e.ensureBaseline()
+	if e.stale {
+		t.Fatal("rescan should clear the stale flag")
+	}
+}
+
+// TestHeadLabel checks that the changed-on-disk marker shows only when stale.
+func TestHeadLabel(t *testing.T) {
+	n := &Node{Path: "/x", IsDir: true, Size: 2048, Files: 3, Dirs: 1}
+	if strings.Contains(headLabel(n, false), "●") {
+		t.Error("a clean directory header should not carry the marker")
+	}
+	if !strings.Contains(headLabel(n, true), "●") {
+		t.Error("a stale directory header should carry the marker")
 	}
 }

@@ -1,0 +1,323 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// useColor is set once in main from the terminal/NO_COLOR/--no-color state and
+// read by paint.
+var useColor bool
+
+// paint wraps s in an ANSI SGR code when color is enabled, otherwise returns it
+// unchanged.
+func paint(s, code string) string {
+	if !useColor {
+		return s
+	}
+	return "\x1b[" + code + "m" + s + "\x1b[0m"
+}
+
+// isTTY reports whether f is connected to a terminal.
+func isTTY(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// humanize renders a byte count using IEC units (KiB, MiB, ...).
+func humanize(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit && exp < len(units)-1; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %s", float64(b)/float64(div), units[exp])
+}
+
+// comma groups an integer with thousands separators.
+func comma(n int64) string {
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	s := strconv.FormatInt(n, 10)
+	if len(s) > 3 {
+		var b strings.Builder
+		pre := len(s) % 3
+		if pre > 0 {
+			b.WriteString(s[:pre])
+			b.WriteByte(',')
+		}
+		for i := pre; i < len(s); i += 3 {
+			b.WriteString(s[i : i+3])
+			if i+3 < len(s) {
+				b.WriteByte(',')
+			}
+		}
+		s = b.String()
+	}
+	if neg {
+		return "-" + s
+	}
+	return s
+}
+
+// bar draws a width-character meter for frac in [0,1] using Unicode eighths so
+// small fractions are still visible.
+func bar(frac float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if frac < 0 {
+		frac = 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	parts := []rune(" ▏▎▍▌▋▊▉█")
+	eighths := int(frac*float64(width)*8 + 0.5)
+	full := eighths / 8
+	rem := eighths % 8
+	var b strings.Builder
+	used := 0
+	for ; used < full && used < width; used++ {
+		b.WriteRune('█')
+	}
+	if rem > 0 && used < width {
+		b.WriteRune(parts[rem])
+		used++
+	}
+	for ; used < width; used++ {
+		b.WriteRune('░')
+	}
+	return b.String()
+}
+
+// parseSize turns a human size like "10M" or "1.5GiB" into bytes. An empty
+// string is zero.
+func parseSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	i := 0
+	for i < len(s) && (s[i] == '.' || (s[i] >= '0' && s[i] <= '9')) {
+		i++
+	}
+	num, unit := s[:i], strings.ToLower(strings.TrimSpace(s[i:]))
+	var mult int64
+	switch unit {
+	case "", "b":
+		mult = 1
+	case "k", "kb", "kib":
+		mult = 1 << 10
+	case "m", "mb", "mib":
+		mult = 1 << 20
+	case "g", "gb", "gib":
+		mult = 1 << 30
+	case "t", "tb", "tib":
+		mult = 1 << 40
+	case "p", "pb", "pib":
+		mult = 1 << 50
+	default:
+		return 0, fmt.Errorf("invalid size unit %q", unit)
+	}
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size %q", s)
+	}
+	return int64(f * float64(mult)), nil
+}
+
+// meter is the fixed-width "size  pct  bar" column shared by every report.
+func meter(size, total int64) string {
+	frac := 0.0
+	if total > 0 {
+		frac = float64(size) / float64(total)
+	}
+	return fmt.Sprintf("%10s %s %s",
+		humanize(size),
+		paint(fmt.Sprintf("%4.0f%%", frac*100), "2"),
+		paint(bar(frac, 18), "36"))
+}
+
+// label renders a node's name, marking directories with a trailing slash and
+// color.
+func label(n *Node) string {
+	if n.IsDir {
+		return paint(n.Name+"/", "1;34")
+	}
+	return n.Name
+}
+
+// withProgress runs fn while showing a lightweight scan counter on stderr (only
+// when stderr is a terminal).
+func withProgress(s *scanner, fn func()) {
+	if !isTTY(os.Stderr) {
+		fn()
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(100 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				fmt.Fprintf(os.Stderr, "\r\x1b[Kscanning… %s items", comma(s.scanned.Load()))
+			}
+		}
+	}()
+	fn()
+	close(done)
+	fmt.Fprint(os.Stderr, "\r\x1b[K")
+}
+
+// header prints the path line plus a one-line subtree total.
+func header(root *Node, path string) {
+	fmt.Println(paint(path, "1"))
+	line := fmt.Sprintf("%s in %s files, %s dirs",
+		humanize(root.Size), comma(root.Files), comma(root.Dirs))
+	if root.Err != nil {
+		line += "  " + paint("(some entries were unreadable)", "31")
+	}
+	fmt.Println(line)
+}
+
+// printSummary lists the largest items directly under the path. This is the
+// default mode and the quickest answer to "where did my space go?".
+func printSummary(root *Node, path string, o options) {
+	sortChildren(root)
+	header(root, path)
+	fmt.Println()
+
+	total := root.Size
+	shown := 0
+	for _, c := range root.Children {
+		if o.min > 0 && c.Size < o.min {
+			break
+		}
+		fmt.Printf("%s  %s\n", meter(c.Size, total), label(c))
+		shown++
+		if o.limit > 0 && shown >= o.limit {
+			break
+		}
+	}
+	if shown == 0 {
+		fmt.Println(paint("(empty)", "2"))
+	}
+	if isTTY(os.Stdout) {
+		fmt.Printf("\n%s\n", paint("tip: -i to explore interactively · --tree for a tree · --files for the biggest files", "2"))
+	}
+}
+
+// printTree prints a size-sorted tree with box-drawing connectors, pruned by
+// --depth, --limit (per directory) and --min.
+func printTree(root *Node, path string, o options) {
+	sortChildren(root)
+	header(root, path)
+	total := root.Size
+	fmt.Printf("%s  %s\n", meter(total, total), paint(filepath.Base(path)+"/", "1;34"))
+	treeKids(root, total, "", o, 1)
+}
+
+func treeKids(n *Node, total int64, prefix string, o options, depth int) {
+	if o.depth > 0 && depth > o.depth {
+		return
+	}
+	kids := shownKids(n, o)
+	for i, c := range kids {
+		last := i == len(kids)-1
+		branch, next := "├─ ", prefix+"│  "
+		if last {
+			branch, next = "└─ ", prefix+"   "
+		}
+		fmt.Printf("%s  %s%s\n", meter(c.Size, total), prefix+branch, label(c))
+		if c.IsDir {
+			treeKids(c, total, next, o, depth+1)
+		}
+	}
+}
+
+// shownKids returns a node's children in display order after applying the --min
+// and --limit cutoffs.
+func shownKids(n *Node, o options) []*Node {
+	sortChildren(n)
+	var out []*Node
+	for _, c := range n.Children {
+		if o.min > 0 && c.Size < o.min {
+			break
+		}
+		out = append(out, c)
+		if o.limit > 0 && len(out) >= o.limit {
+			break
+		}
+	}
+	return out
+}
+
+// printFiles lists the largest individual files anywhere in the subtree.
+func printFiles(root *Node, path string, o options) {
+	var files []*Node
+	walk(root, func(n *Node) {
+		if !n.IsDir {
+			files = append(files, n)
+		}
+	})
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].Size != files[j].Size {
+			return files[i].Size > files[j].Size
+		}
+		return files[i].Path < files[j].Path
+	})
+
+	header(root, path)
+	fmt.Println()
+
+	limit := o.limit
+	if limit <= 0 {
+		limit = 30
+	}
+	total := root.Size
+	shown := 0
+	for _, f := range files {
+		if o.min > 0 && f.Size < o.min {
+			break
+		}
+		rel, err := filepath.Rel(path, f.Path)
+		if err != nil {
+			rel = f.Path
+		}
+		fmt.Printf("%s  %s\n", meter(f.Size, total), rel)
+		shown++
+		if shown >= limit {
+			break
+		}
+	}
+	if shown == 0 {
+		fmt.Println(paint("(no files)", "2"))
+	}
+}
+
+// printJSON writes the whole tree as indented JSON for further processing.
+func printJSON(root *Node) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(root)
+}

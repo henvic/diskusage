@@ -182,6 +182,73 @@ func TestExplorerStale(t *testing.T) {
 	}
 }
 
+// TestSelected covers the cursor target used by copy: the highlighted entry,
+// or nil for an empty directory.
+func TestSelected(t *testing.T) {
+	empty := &Node{Name: "empty", IsDir: true}
+	e := &explorer{stack: []*Node{empty}, sel: []int{0}, off: []int{0}}
+	if e.selected() != nil {
+		t.Error("an empty directory should have no selection")
+	}
+
+	a := &Node{Name: "a", Size: 200}
+	b := &Node{Name: "b", Size: 100}
+	dir := &Node{Name: "dir", IsDir: true, Children: []*Node{a, b}}
+	e = &explorer{stack: []*Node{dir}, sel: []int{1}, off: []int{0}}
+	if got := e.selected(); got != b {
+		t.Errorf("selected() = %v, want b", got)
+	}
+}
+
+// TestDisplayPath covers the absolute vs. relative rendering used by c and C.
+func TestDisplayPath(t *testing.T) {
+	wd := "/home/user/proj"
+	cases := []struct {
+		raw      string
+		absolute bool
+		want     string
+	}{
+		{"a/b.txt", true, "/home/user/proj/a/b.txt"}, // relative entry → absolute
+		{"a/b.txt", false, "a/b.txt"},                // relative entry → relative
+		{"/home/user/proj/a/b.txt", true, "/home/user/proj/a/b.txt"},
+		{"/home/user/proj/a/b.txt", false, "a/b.txt"}, // absolute entry → relative
+		{"/etc/hosts", false, "../../../etc/hosts"},   // outside wd → climbs out
+		{".", true, "/home/user/proj"},                // current dir → absolute
+		{".", false, "."},
+	}
+	for _, c := range cases {
+		if got := displayPath(c.raw, wd, c.absolute); got != c.want {
+			t.Errorf("displayPath(%q, %q, %v) = %q, want %q", c.raw, wd, c.absolute, got, c.want)
+		}
+	}
+}
+
+// TestExplorerHelp checks the help overlay toggles open and any key dismisses
+// it, while q still quits.
+func TestExplorerHelp(t *testing.T) {
+	root := &Node{Name: "root", IsDir: true, Children: []*Node{{Name: "a", Size: 1}}}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+
+	e.handle([]byte("?"))
+	if !e.help {
+		t.Fatal("? should open the help overlay")
+	}
+	if e.handle([]byte("j")) {
+		t.Fatal("a key should not quit while help is open")
+	}
+	if e.help {
+		t.Fatal("any key should dismiss the help overlay")
+	}
+	e.handle([]byte("?"))
+	if !e.help {
+		t.Fatal("? should reopen the help overlay")
+	}
+	if !e.handle([]byte("q")) {
+		t.Fatal("q should quit even from the help overlay")
+	}
+}
+
 // TestHeadLabel checks that the changed-on-disk marker shows only when stale.
 func TestHeadLabel(t *testing.T) {
 	n := &Node{Path: "/x", IsDir: true, Size: 2048, Files: 3, Dirs: 1}

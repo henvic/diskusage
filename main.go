@@ -134,8 +134,10 @@ Flags:
 	flag.PrintDefaults()
 	fmt.Fprint(os.Stderr, `
 Interactive keys (-i):
-  ↑/↓ or j/k  move      →/Enter or l  open dir    ←/h/Esc  go up (back)
-  r  rescan from disk   g/G  first/last           q or Ctrl-C  quit
+  ↑/↓ or j/k  move           →/Enter or l  open dir   ←/h/Esc  go up (back)
+  c / C  copy absolute / relative path     f  open folder in Finder
+  r  rescan from disk        g/G  first/last           ?  show keys
+  q or Ctrl-C  quit
 A ● in the header marks the current directory as changed on disk since scanned.
 
 Examples:

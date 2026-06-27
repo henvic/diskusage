@@ -38,12 +38,23 @@ disk blocks** (matching `du`); pass `--apparent` for logical file sizes.
 ### Interactive keys (`-i`)
 
 ```
-↑/↓ or j/k   move          →/Enter or l   open directory
-←/h/Esc      go up (back)   r              rescan from disk
-g/G          first / last   q or Ctrl-C    quit
+↑/↓ or j/k   move                →/Enter or l   open directory
+←/h/Esc      go up (back)         g/G            first / last
+c            copy absolute path   C              copy relative path
+f            open in Finder       r              rescan from disk
+?            show keys            q or Ctrl-C    quit
 ```
 
-Esc backs out one level rather than quitting; at the root it does nothing. Use `q` or Ctrl-C to exit.
+Esc backs out one level rather than quitting; at the root it does nothing, and
+`q` or Ctrl-C exits. `?` shows the key reference. `c` flashes the selected row
+and copies its absolute path to the clipboard; `C` copies the path relative to
+the current working directory. `f` opens the directory you are viewing in the
+file manager. On macOS copy/open use `pbcopy` and `open` (Finder); on Linux
+they fall back to `wl-copy`/`xclip`/`xsel` and `xdg-open`. (Cmd+C can't be
+bound: the terminal handles it itself to copy selected text, so it never
+reaches the program.)
+
+The window also redraws on resize.
 
 The tree is a snapshot taken when the scan ran, so edits you make on disk
 afterwards are not shown until you press `r`. `r` rescans the directory you are

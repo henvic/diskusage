@@ -3,10 +3,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,6 +31,8 @@ type explorer struct {
 	stale   bool   // current directory changed on disk since it was scanned
 	baseSig uint64 // fingerprint of the current dir at scan/rescan time
 	baseDir string // path the baseline fingerprint belongs to
+	flash   bool   // briefly highlight the selected row (copy feedback)
+	help    bool   // the key reference overlay is showing
 }
 
 // runTUI drives the interactive explorer on the controlling terminal. It always
@@ -43,7 +48,7 @@ func runTUI(root *Node, path string, sc *scanner) error {
 	if err != nil {
 		return err
 	}
-	// cbreak: unbuffered, no echo, but signals stay on so Ctrl-C still fires.
+	// cbreak: unbuffered, no echo, but signals stay on so Ctrl-C still quits.
 	if err := stty(tty, "-echo", "-icanon", "min", "1", "time", "0"); err != nil {
 		return err
 	}
@@ -54,13 +59,18 @@ func runTUI(root *Node, path string, sc *scanner) error {
 	}
 	defer restore()
 
+	// External signals (or a closed terminal) still restore the terminal.
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-sig
 		restore()
 		os.Exit(130)
 	}()
+
+	// Window resizes trigger a full repaint.
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
 
 	fmt.Fprint(tty, "\x1b[?1049h\x1b[?25l") // enter alt screen, hide cursor
 
@@ -112,6 +122,9 @@ func runTUI(root *Node, path string, sc *scanner) error {
 			if e.pollStale() {
 				e.render()
 			}
+		case <-winch:
+			fmt.Fprint(e.tty, "\x1b[2J") // clear stale cells, then repaint at the new size
+			e.render()
 		}
 	}
 }
@@ -193,6 +206,16 @@ func (e *explorer) cur() *Node { return e.stack[len(e.stack)-1] }
 // for the arrow/navigation keys, so the buffer is consumed token by token.
 func (e *explorer) handle(b []byte) bool {
 	e.status = "" // any key clears the previous status line
+	if e.help {
+		// While the help overlay is up, any key dismisses it; q still quits.
+		for _, c := range b {
+			if c == 'q' || c == 3 || c == 4 {
+				return true
+			}
+		}
+		e.help = false
+		return false
+	}
 	for i := 0; i < len(b); i++ {
 		c := b[i]
 
@@ -229,8 +252,16 @@ func (e *explorer) handle(b []byte) bool {
 		}
 
 		switch c {
-		case 'q', 3, 4: // q, Ctrl-C, Ctrl-D
+		case 'q', 3, 4: // q, Ctrl-C (if delivered as a byte), Ctrl-D
 			return true
+		case 'c': // copy the selected absolute path
+			e.copyPath(true)
+		case 'C': // copy the selected path relative to the working directory
+			e.copyPath(false)
+		case 'f': // open the current folder in the file manager
+			e.openFolder()
+		case '?': // show the key reference
+			e.help = true
 		case 'j':
 			e.move(1)
 		case 'k':
@@ -248,6 +279,115 @@ func (e *explorer) handle(b []byte) bool {
 		}
 	}
 	return false
+}
+
+// selected returns the entry the cursor is on, or nil when the directory is
+// empty.
+func (e *explorer) selected() *Node {
+	cur := e.cur()
+	if len(cur.Children) == 0 {
+		return nil
+	}
+	return cur.Children[e.sel[len(e.sel)-1]]
+}
+
+// copyPath puts the selected entry's path (or the current directory's, if the
+// listing is empty) on the clipboard and blinks the row as confirmation. With
+// absolute it copies the full path; otherwise the path relative to the working
+// directory.
+func (e *explorer) copyPath(absolute bool) {
+	target := e.selected()
+	raw := e.cur().Path
+	if target != nil {
+		raw = target.Path
+	}
+	wd, _ := os.Getwd()
+	path := displayPath(raw, wd, absolute)
+	if err := copyToClipboard(path); err != nil {
+		e.status = "copy failed: " + err.Error()
+		return
+	}
+	e.status = "copied " + path
+	if target != nil {
+		e.blink()
+	}
+}
+
+// displayPath renders raw as either an absolute path or one relative to wd.
+// raw may already be absolute or relative to wd (as stored in the tree).
+func displayPath(raw, wd string, absolute bool) string {
+	abs := raw
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(wd, raw)
+	}
+	abs = filepath.Clean(abs)
+	if absolute {
+		return abs
+	}
+	if rel, err := filepath.Rel(wd, abs); err == nil {
+		return rel
+	}
+	return abs
+}
+
+// openFolder reveals the directory currently on screen in the OS file manager.
+func (e *explorer) openFolder() {
+	path := e.cur().Path
+	if err := openInFileManager(path); err != nil {
+		e.status = "open failed: " + err.Error()
+		return
+	}
+	e.status = "opened " + path
+}
+
+// blink briefly flashes the selected row to confirm an action.
+func (e *explorer) blink() {
+	for i := 0; i < 2; i++ {
+		e.flash = true
+		e.render()
+		time.Sleep(70 * time.Millisecond)
+		e.flash = false
+		e.render()
+		time.Sleep(70 * time.Millisecond)
+	}
+}
+
+// copyToClipboard writes text to the system clipboard, picking the right tool
+// for the platform.
+func copyToClipboard(text string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "linux":
+		for _, c := range [][]string{
+			{"wl-copy"},
+			{"xclip", "-selection", "clipboard"},
+			{"xsel", "--clipboard", "--input"},
+		} {
+			if _, err := exec.LookPath(c[0]); err == nil {
+				cmd = exec.Command(c[0], c[1:]...)
+				break
+			}
+		}
+	}
+	if cmd == nil {
+		return errors.New("no clipboard tool found")
+	}
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}
+
+// openInFileManager opens a path in the desktop file manager (Finder on macOS).
+func openInFileManager(path string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", path).Run()
+	case "linux":
+		return exec.Command("xdg-open", path).Run()
+	default:
+		return errors.New("unsupported platform")
+	}
 }
 
 // rescan re-reads the directory currently on screen from disk and folds the
@@ -363,6 +503,10 @@ func (e *explorer) render() {
 	if cols < 20 {
 		cols = 20
 	}
+	if e.help {
+		e.renderHelp(rows, cols)
+		return
+	}
 	cur := e.cur()
 	total := cur.Size
 	body := rows - 2
@@ -394,7 +538,11 @@ func (e *explorer) render() {
 		}
 		row := rowText(cur.Children[idx], total, cols)
 		if idx == sel {
-			sb.WriteString("\x1b[7m" + row + "\x1b[0m")
+			style := "\x1b[7m" // reverse video for the cursor
+			if e.flash {
+				style = "\x1b[30;42m" // black on green: copy confirmation
+			}
+			sb.WriteString(style + row + "\x1b[0m")
 		} else {
 			sb.WriteString(row)
 		}
@@ -405,12 +553,45 @@ func (e *explorer) render() {
 	if len(cur.Children) > 0 {
 		pos = fmt.Sprintf("%d/%d", sel+1, len(cur.Children))
 	}
-	foot := fmt.Sprintf(" ↑/↓ move  →/⏎ open  ←/h/Esc back  r refresh  g/G ends  q quit    %s", pos)
+	foot := fmt.Sprintf(" ↑/↓ move  → open  ← back  c copy  f Finder  r refresh  ? help  q quit    %s", pos)
 	if e.status != "" {
 		foot = " " + e.status
 	}
 	sb.WriteString("\x1b[K\x1b[7m" + fit(foot, cols) + "\x1b[0m")
 
+	fmt.Fprint(e.tty, sb.String())
+}
+
+// renderHelp draws the key reference overlay. Any key dismisses it.
+func (e *explorer) renderHelp(rows, cols int) {
+	keys := []string{
+		"  ↑/↓   j/k         move",
+		"  →/l   Enter       open directory",
+		"  ←/h   Esc         go up (back)",
+		"  g/G               first / last",
+		"  c                 copy absolute path",
+		"  C                 copy relative path",
+		"  f                 open folder in Finder",
+		"  r                 rescan from disk",
+		"  ?                 toggle this help",
+		"  q                 quit",
+	}
+	var sb strings.Builder
+	sb.WriteString("\x1b[H")
+	for i := 0; i < rows; i++ {
+		sb.WriteString("\x1b[K")
+		switch {
+		case i == 0:
+			sb.WriteString("\x1b[7m" + fit(" Keys", cols) + "\x1b[0m")
+		case i-2 >= 0 && i-2 < len(keys):
+			sb.WriteString(fit(keys[i-2], cols))
+		case i == rows-1:
+			sb.WriteString("\x1b[7m" + fit(" press any key to return", cols) + "\x1b[0m")
+		}
+		if i < rows-1 {
+			sb.WriteString("\r\n")
+		}
+	}
 	fmt.Fprint(e.tty, sb.String())
 }
 

@@ -536,15 +536,18 @@ func (e *explorer) render() {
 			sb.WriteString("\r\n")
 			continue
 		}
-		row := rowText(cur.Children[idx], total, cols)
+		spans := rowSpans(cur.Children[idx], total)
 		if idx == sel {
 			style := "\x1b[7m" // reverse video for the cursor
 			if e.flash {
 				style = "\x1b[30;42m" // black on green: copy confirmation
 			}
-			sb.WriteString(style + row + "\x1b[0m")
+			// The highlighted row is drawn from plain text so the reverse video
+			// (or flash) covers the whole line; a per-span color reset would end
+			// the highlight early.
+			sb.WriteString(style + fitSpans(spans, cols, false) + "\x1b[0m")
 		} else {
-			sb.WriteString(row)
+			sb.WriteString(fitSpans(spans, cols, useColor))
 		}
 		sb.WriteString("\r\n")
 	}
@@ -606,19 +609,93 @@ func headLabel(n *Node, stale bool) string {
 	return s
 }
 
-// rowText formats one entry padded to the full width so reverse-video selection
-// covers the line. It carries no color codes, so truncation is safe.
-func rowText(n *Node, total int64, cols int) string {
+// styledSpan is a run of text with an optional SGR parameter ("" means no
+// color). Rows are assembled from spans so their width can be measured in
+// visible runes independently of the color escapes wrapped around them.
+type styledSpan struct {
+	text string
+	code string
+}
+
+// rowSpans builds the styled segments of one entry's row, mirroring the
+// non-interactive report's columns (see meter and label in report.go): a plain
+// right-aligned size, a dim percentage, a cyan usage bar, two spaces, and the
+// name — bold blue with a trailing slash for directories. The segments are
+// returned untruncated; fitSpans lays them out to the available width. The
+// concatenated text is identical to the old colorless row, so the layout is
+// unchanged when color is off.
+func rowSpans(n *Node, total int64) []styledSpan {
 	frac := 0.0
 	if total > 0 {
 		frac = float64(n.Size) / float64(total)
 	}
 	name := n.Name
+	nameCode := ""
 	if n.IsDir {
 		name += "/"
+		nameCode = "1;34"
 	}
-	prefix := fmt.Sprintf("%10s %4.0f%% %s  ", humanize(n.Size), frac*100, bar(frac, 16))
-	return fit(prefix+name, cols)
+	return []styledSpan{
+		{fmt.Sprintf("%10s ", humanize(n.Size)), ""},
+		{fmt.Sprintf("%4.0f%%", frac*100), "2"},
+		{" ", ""},
+		{bar(frac, 16), "36"},
+		{"  ", ""},
+		{name, nameCode},
+	}
+}
+
+// fitSpans renders spans to exactly w columns: it truncates with a trailing
+// ellipsis when the text overflows and right-pads with spaces when it falls
+// short, measuring width in runes while ignoring the SGR escapes. When color is
+// true each span is wrapped in its code; when false the plain text is emitted —
+// used for the selected row, which is shown in reverse video and so must contain
+// no resets that would cut the highlight short.
+func fitSpans(spans []styledSpan, w int, color bool) string {
+	if w < 0 {
+		w = 0
+	}
+	var b strings.Builder
+	used := 0
+	for _, s := range spans {
+		if used >= w {
+			break
+		}
+		r := []rune(s.text)
+		if used+len(r) <= w {
+			writeSpan(&b, s.text, s.code, color)
+			used += len(r)
+			continue
+		}
+		// This span overflows the line; truncate it so the row ends with an
+		// ellipsis at exactly column w.
+		take := w - used // room left, always >= 1 here
+		if take == 1 {
+			writeSpan(&b, "…", s.code, color)
+		} else {
+			writeSpan(&b, string(r[:take-1])+"…", s.code, color)
+		}
+		used = w
+		break
+	}
+	if used < w {
+		b.WriteString(strings.Repeat(" ", w-used))
+	}
+	return b.String()
+}
+
+// writeSpan appends text to b, wrapping it in its SGR code when color is enabled
+// and a code is set; otherwise the plain text is written.
+func writeSpan(b *strings.Builder, text, code string, color bool) {
+	if color && code != "" {
+		b.WriteString("\x1b[")
+		b.WriteString(code)
+		b.WriteString("m")
+		b.WriteString(text)
+		b.WriteString("\x1b[0m")
+		return
+	}
+	b.WriteString(text)
 }
 
 // fit truncates s with an ellipsis or right-pads it with spaces to exactly w

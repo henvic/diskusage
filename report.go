@@ -76,8 +76,12 @@ func comma(n int64) string {
 	return s
 }
 
-// bar draws a width-character meter for frac in [0,1] using Unicode eighths so
-// small fractions are still visible.
+// bar draws a width-character meter for frac in [0,1] using Unicode eighth
+// blocks, so a fraction smaller than a single cell still shows a thin sliver.
+// The unfilled cells are left blank: the eighth blocks are left-aligned and
+// narrower than a cell, and against a blank track their bare right side merges
+// into the empty space instead of standing out as a gap (as it did against a
+// dither).
 func bar(frac float64, width int) string {
 	if width <= 0 {
 		return ""
@@ -102,7 +106,7 @@ func bar(frac float64, width int) string {
 		used++
 	}
 	for ; used < width; used++ {
-		b.WriteRune('░')
+		b.WriteRune(' ')
 	}
 	return b.String()
 }

@@ -538,16 +538,23 @@ func (e *explorer) render() {
 		}
 		spans := rowSpans(cur.Children[idx], total)
 		if idx == sel {
-			style := "\x1b[7m" // reverse video for the cursor
+			// The highlighted row sits under a row-wide reverse-video (or flash)
+			// highlight, so its spans carry no color resets that would cut the
+			// highlight short. The exception is the meter fill, which spanSelected
+			// keeps cyan instead of letting it invert to the terminal background.
+			style, rowStyle := "\x1b[7m", spanPlain // reverse video for the cursor
 			if e.flash {
 				style = "\x1b[30;42m" // black on green: copy confirmation
+			} else if useColor {
+				rowStyle = spanSelected
 			}
-			// The highlighted row is drawn from plain text so the reverse video
-			// (or flash) covers the whole line; a per-span color reset would end
-			// the highlight early.
-			sb.WriteString(style + fitSpans(spans, cols, false) + "\x1b[0m")
+			sb.WriteString(style + fitSpans(spans, cols, rowStyle) + "\x1b[0m")
 		} else {
-			sb.WriteString(fitSpans(spans, cols, useColor))
+			rowStyle := spanPlain
+			if useColor {
+				rowStyle = spanColor
+			}
+			sb.WriteString(fitSpans(spans, cols, rowStyle))
 		}
 		sb.WriteString("\r\n")
 	}
@@ -647,11 +654,10 @@ func rowSpans(n *Node, total int64) []styledSpan {
 
 // fitSpans renders spans to exactly w columns: it truncates with a trailing
 // ellipsis when the text overflows and right-pads with spaces when it falls
-// short, measuring width in runes while ignoring the SGR escapes. When color is
-// true each span is wrapped in its code; when false the plain text is emitted —
-// used for the selected row, which is shown in reverse video and so must contain
-// no resets that would cut the highlight short.
-func fitSpans(spans []styledSpan, w int, color bool) string {
+// short, measuring width in runes while ignoring the SGR escapes. The style
+// callback turns each span's (text, code) into its on-screen form; see
+// spanColor, spanPlain, and spanSelected.
+func fitSpans(spans []styledSpan, w int, style func(text, code string) string) string {
 	if w < 0 {
 		w = 0
 	}
@@ -663,7 +669,7 @@ func fitSpans(spans []styledSpan, w int, color bool) string {
 		}
 		r := []rune(s.text)
 		if used+len(r) <= w {
-			writeSpan(&b, s.text, s.code, color)
+			b.WriteString(style(s.text, s.code))
 			used += len(r)
 			continue
 		}
@@ -671,9 +677,9 @@ func fitSpans(spans []styledSpan, w int, color bool) string {
 		// ellipsis at exactly column w.
 		take := w - used // room left, always >= 1 here
 		if take == 1 {
-			writeSpan(&b, "…", s.code, color)
+			b.WriteString(style("…", s.code))
 		} else {
-			writeSpan(&b, string(r[:take-1])+"…", s.code, color)
+			b.WriteString(style(string(r[:take-1])+"…", s.code))
 		}
 		used = w
 		break
@@ -684,18 +690,30 @@ func fitSpans(spans []styledSpan, w int, color bool) string {
 	return b.String()
 }
 
-// writeSpan appends text to b, wrapping it in its SGR code when color is enabled
-// and a code is set; otherwise the plain text is written.
-func writeSpan(b *strings.Builder, text, code string, color bool) {
-	if color && code != "" {
-		b.WriteString("\x1b[")
-		b.WriteString(code)
-		b.WriteString("m")
-		b.WriteString(text)
-		b.WriteString("\x1b[0m")
-		return
+// spanColor wraps text in its SGR code when one is set; used for ordinary,
+// unselected rows.
+func spanColor(text, code string) string {
+	if code == "" {
+		return text
 	}
-	b.WriteString(text)
+	return "\x1b[" + code + "m" + text + "\x1b[0m"
+}
+
+// spanPlain emits text with no styling. It is used under a row-wide reverse-video
+// highlight (where an embedded SGR reset would cut the highlight short) and when
+// color is disabled.
+func spanPlain(text, _ string) string { return text }
+
+// spanSelected is spanPlain except it paints the meter fill (code "36") with a
+// cyan background; under the selected row's reverse video that shows as a cyan
+// foreground, so the filled blocks stay cyan rather than inverting to the
+// terminal background. The background is reset right after, so the rest of the
+// row keeps the plain reverse-video highlight.
+func spanSelected(text, code string) string {
+	if code == "36" {
+		return "\x1b[46m" + text + "\x1b[49m"
+	}
+	return text
 }
 
 // fit truncates s with an ellipsis or right-pads it with spaces to exactly w

@@ -156,8 +156,14 @@ func run() error {
 		// On non-Unix the runTUI stub returns an error, and /dev/tty can fail to
 		// open; either way fall back to the printed summary — silently, since
 		// interactive mode is only ever the default, never explicitly requested.
-		if err := runTUI(root, path, s); err != nil {
+		marks, err := runTUI(root, path, s)
+		if err != nil {
 			printSummary(root, path, o)
+			return nil
+		}
+		// Entries staged with 'm' print as absolute paths after the explorer exits.
+		for _, m := range marks {
+			fmt.Println(m)
 		}
 		return nil
 	default: // modeSummary
@@ -185,8 +191,10 @@ Interactive keys:
   ↑/↓ or j/k  move           →/Enter or l  open dir   ←/h/Esc  go up (back)
   c / C  copy absolute / relative path     f  open folder in Finder
   r  rescan from disk        g/G  first/last           ?  show keys
-  .  show/hide dotfiles      q or Ctrl-C  quit
+  .  show/hide dotfiles      m  mark / unmark           M  marks panel
+  q or Ctrl-C  quit
 A ● in the header marks the current directory as changed on disk since scanned.
+Entries you mark with m are printed as absolute paths when you quit.
 
 Examples:
   diskusage                       explore the current directory

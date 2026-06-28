@@ -45,7 +45,8 @@ format flag), or pipe the output, to print instead.
 ←/h/Esc      go up (back)         g/G            first / last
 c            copy absolute path   C              copy relative path
 f            open in Finder       r              rescan from disk
-.            show/hide dotfiles   ?              show keys
+.            show/hide dotfiles   m              mark / unmark entry
+M            marks panel          ?              show keys
 q or Ctrl-C  quit
 ```
 
@@ -61,6 +62,14 @@ bound: the terminal handles it itself to copy selected text, so it never
 reaches the program.)
 
 The window also redraws on resize.
+
+**Marks (a staging area).** Press `m` to mark the highlighted entry (file or
+directory) to check later — marked rows get a `*` and the footer shows the
+count. `M` opens the marks panel, where you can review the list (shown as
+absolute paths; press `a` to switch to paths relative to where you launched),
+`m` to unmark, and Enter to jump straight to a mark's location. On quit, every
+marked path is printed to standard output as an absolute path, one per line.
+Marks last for the session only.
 
 The tree is a snapshot taken when the scan ran, so edits you make on disk
 afterwards are not shown until you press `r`. `r` rescans the directory you are

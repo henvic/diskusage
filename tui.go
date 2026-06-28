@@ -34,24 +34,34 @@ type explorer struct {
 	flash   bool   // briefly highlight the selected row (copy feedback)
 	help    bool   // the key reference overlay is showing
 	hideDot bool   // hide dot ("hidden") entries from the listing
+
+	// marks is a session-only staging area of entries to revisit, keyed by
+	// Node.Path so they survive a rescan (which replaces nodes but reproduces the
+	// same paths). marksView is a second overlay, modeled on help.
+	marks     []string        // marked paths, in mark order
+	marked    map[string]bool // membership set (lazy-init); drives the row star
+	marksView bool            // the marks panel is showing
+	marksSel  int             // cursor row within the panel
+	marksOff  int             // panel scroll offset
+	marksRel  bool            // panel shows paths relative to CWD (default: absolute)
 }
 
 // runTUI drives the interactive explorer on the controlling terminal. It always
 // restores the terminal, even on Ctrl-C.
-func runTUI(root *Node, path string, sc *scanner) error {
+func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tty.Close()
 
 	orig, err := sttyState(tty)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// cbreak: unbuffered, no echo, but signals stay on so Ctrl-C still quits.
 	if err := stty(tty, "-echo", "-icanon", "min", "1", "time", "0"); err != nil {
-		return err
+		return nil, err
 	}
 
 	restore := func() {
@@ -77,6 +87,7 @@ func runTUI(root *Node, path string, sc *scanner) error {
 
 	sortChildren(root)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc}
+	wd, _ := os.Getwd() // launch dir; the program never chdirs, so it holds until quit
 
 	// Read keys in a goroutine so the main loop can also wake on a timer to
 	// re-check whether the current directory changed on disk.
@@ -112,10 +123,10 @@ func runTUI(root *Node, path string, sc *scanner) error {
 		select {
 		case k, ok := <-keys:
 			if !ok {
-				return nil // terminal closed
+				return markPaths(e.marks, wd), nil // terminal closed
 			}
 			if e.handle(k) {
-				return nil
+				return markPaths(e.marks, wd), nil
 			}
 			e.ensureBaseline()
 			e.render()
@@ -207,6 +218,9 @@ func (e *explorer) cur() *Node { return e.stack[len(e.stack)-1] }
 // for the arrow/navigation keys, so the buffer is consumed token by token.
 func (e *explorer) handle(b []byte) bool {
 	e.status = "" // any key clears the previous status line
+	if e.marksView {
+		return e.handleMarks(b)
+	}
 	if e.help {
 		// While the help overlay is up, any key dismisses it; q still quits.
 		for _, c := range b {
@@ -275,6 +289,10 @@ func (e *explorer) handle(b []byte) bool {
 			e.rescan()
 		case '.':
 			e.toggleHidden()
+		case 'm':
+			e.toggleMark()
+		case 'M':
+			e.openMarks()
 		case 'g':
 			e.set(0)
 		case 'G':
@@ -352,6 +370,59 @@ func (e *explorer) toggleHidden() {
 	} else {
 		e.status = "showing all entries"
 	}
+}
+
+// toggleMark adds or removes the selected entry from the staging area. Marks are
+// keyed by path so they survive a rescan; the listing stars marked rows and the
+// whole set prints on quit.
+func (e *explorer) toggleMark() {
+	n := e.selected()
+	if n == nil {
+		e.status = "nothing to mark"
+		return
+	}
+	if e.marked[n.Path] {
+		e.unmarkPath(n.Path)
+		e.status = "unmarked " + n.Name
+		return
+	}
+	if e.marked == nil {
+		e.marked = map[string]bool{}
+	}
+	e.marked[n.Path] = true
+	e.marks = append(e.marks, n.Path)
+	e.status = fmt.Sprintf("marked %s  (%d marked)", n.Name, len(e.marks))
+}
+
+// unmarkPath removes a path from the staging area, preserving the order of the
+// rest.
+func (e *explorer) unmarkPath(path string) {
+	delete(e.marked, path)
+	for i, p := range e.marks {
+		if p == path {
+			e.marks = append(e.marks[:i], e.marks[i+1:]...)
+			break
+		}
+	}
+}
+
+// markPaths renders the staged paths as absolute strings in mark order, for
+// printing to stdout on quit. It is pure so it is testable without a terminal.
+func markPaths(marks []string, wd string) []string {
+	if len(marks) == 0 {
+		return nil
+	}
+	out := make([]string, len(marks))
+	for i, p := range marks {
+		out[i] = displayPath(p, wd, true)
+	}
+	return out
+}
+
+// openMarks shows the marks panel with its cursor clamped into range.
+func (e *explorer) openMarks() {
+	e.marksView = true
+	e.marksSet(e.marksSel)
 }
 
 // selected returns the entry the cursor is on, or nil when the listing is empty.
@@ -583,6 +654,10 @@ func (e *explorer) render() {
 	if cols < 20 {
 		cols = 20
 	}
+	if e.marksView {
+		e.renderMarks(rows, cols)
+		return
+	}
 	if e.help {
 		e.renderHelp(rows, cols)
 		return
@@ -632,7 +707,7 @@ func (e *explorer) render() {
 			sb.WriteString("\r\n")
 			continue
 		}
-		spans := rowSpans(kids[idx], total)
+		spans := rowSpans(kids[idx], total, e.marked[kids[idx].Path])
 		if idx == sel {
 			// The highlighted row sits under a row-wide reverse-video (or flash)
 			// highlight, so its spans carry no color resets that would cut the
@@ -659,7 +734,10 @@ func (e *explorer) render() {
 	if len(kids) > 0 {
 		pos = fmt.Sprintf("%d/%d", sel+1, len(kids))
 	}
-	foot := fmt.Sprintf(" ↑/↓ move  → open  ← back  c copy  f Finder  r refresh  ? help  q quit    %s", pos)
+	if len(e.marks) > 0 {
+		pos += fmt.Sprintf("  *%d", len(e.marks))
+	}
+	foot := fmt.Sprintf(" ↑/↓ move  → open  ← back  m mark  M marks  ? help  q quit    %s", pos)
 	if e.status != "" {
 		foot = " " + e.status
 	}
@@ -680,6 +758,8 @@ func (e *explorer) renderHelp(rows, cols int) {
 		"  f                 open folder in Finder",
 		"  r                 rescan from disk",
 		"  .                 show/hide dotfiles",
+		"  m                 mark / unmark entry",
+		"  M                 marks panel",
 		"  ?                 toggle this help",
 		"  q                 quit",
 	}
@@ -702,6 +782,207 @@ func (e *explorer) renderHelp(rows, cols int) {
 	fmt.Fprint(e.tty, sb.String())
 }
 
+// handleMarks dispatches keys while the marks panel is open. Like the help
+// overlay it owns all input: j/k move, Enter/l/space jump to a mark's location,
+// m/d/x unmark, p toggles the path format, Esc/M close, q/Ctrl-C/Ctrl-D quit.
+func (e *explorer) handleMarks(b []byte) bool {
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if c == 27 { // CSI arrows, or a lone Esc that closes the panel
+			if i+2 < len(b) && b[i+1] == '[' {
+				switch b[i+2] {
+				case 'A':
+					e.marksMove(-1)
+				case 'B':
+					e.marksMove(1)
+				case 'H':
+					e.marksSet(0)
+				case 'F':
+					e.marksSet(len(e.marks) - 1)
+				}
+				i += 2
+				for i+1 < len(b) && b[i+1] == '~' {
+					i++
+				}
+				continue
+			}
+			e.marksView = false
+			continue
+		}
+		switch c {
+		case 'q', 3, 4:
+			return true
+		case 'M':
+			e.marksView = false
+		case 'j':
+			e.marksMove(1)
+		case 'k':
+			e.marksMove(-1)
+		case 'g':
+			e.marksSet(0)
+		case 'G':
+			e.marksSet(len(e.marks) - 1)
+		case 'a':
+			e.marksRel = !e.marksRel
+		case 'm', 'd', 'x':
+			e.unmarkAt(e.marksSel)
+		case 'l', '\r', '\n', ' ':
+			e.jumpToMark()
+		}
+	}
+	return false
+}
+
+func (e *explorer) marksMove(d int) { e.marksSet(e.marksSel + d) }
+
+func (e *explorer) marksSet(i int) {
+	if i >= len(e.marks) {
+		i = len(e.marks) - 1
+	}
+	if i < 0 {
+		i = 0
+	}
+	e.marksSel = i
+}
+
+// unmarkAt removes the mark at panel row i and keeps the cursor in range.
+func (e *explorer) unmarkAt(i int) {
+	if i < 0 || i >= len(e.marks) {
+		return
+	}
+	e.unmarkPath(e.marks[i])
+	e.marksSet(e.marksSel)
+}
+
+// jumpToMark navigates to the highlighted mark's location and closes the panel.
+// A mark whose path is gone (deleted then rescanned away) leaves the panel open
+// with an explanatory status.
+func (e *explorer) jumpToMark() {
+	if e.marksSel < 0 || e.marksSel >= len(e.marks) {
+		return
+	}
+	if e.jumpTo(e.marks[e.marksSel]) {
+		e.marksView = false
+	}
+}
+
+// locate returns the chain of nodes from root down to the entry at target
+// (inclusive), or nil if target is not in the in-memory tree.
+func locate(root *Node, target string) []*Node {
+	rel, err := filepath.Rel(root.Path, target)
+	if err != nil {
+		return nil
+	}
+	chain := []*Node{root}
+	if rel == "." {
+		return chain
+	}
+	n := root
+	for _, name := range strings.Split(rel, string(os.PathSeparator)) {
+		var next *Node
+		for _, c := range n.Children {
+			if c.Name == name {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			return nil
+		}
+		chain = append(chain, next)
+		n = next
+	}
+	return chain
+}
+
+// jumpTo rebuilds the navigation stack so target is selected inside its parent
+// (it never opens target, so files and directories behave the same). It reports
+// whether the path was found.
+func (e *explorer) jumpTo(target string) bool {
+	chain := locate(e.stack[0], target)
+	if chain == nil {
+		e.status = "can't find " + target + " — press r to rescan"
+		return false
+	}
+	// Reveal the target if the dotfile filter would hide it or an ancestor.
+	if e.hideDot {
+		for _, n := range chain[1:] {
+			if strings.HasPrefix(n.Name, ".") {
+				e.hideDot = false
+				break
+			}
+		}
+	}
+	if len(chain) == 1 { // target is the root itself
+		e.stack, e.sel, e.off = chain, []int{0}, []int{0}
+		return true
+	}
+	stack := chain[:len(chain)-1] // down to the parent
+	sel := make([]int, len(stack))
+	off := make([]int, len(stack))
+	for d := range stack {
+		want := chain[d+1] // the next node toward (and finally at) the target
+		for i, c := range e.visible(stack[d]) {
+			if c == want {
+				sel[d] = i
+				break
+			}
+		}
+	}
+	e.stack, e.sel, e.off = stack, sel, off
+	return true
+}
+
+// renderMarks draws the marks panel: the staged paths (relative to the launch
+// dir, or absolute with 'p'), with the cursor row highlighted.
+func (e *explorer) renderMarks(rows, cols int) {
+	wd, _ := os.Getwd()
+	e.marksSet(e.marksSel) // keep the cursor in range after unmarking
+	body := rows - 2
+	if e.marksSel < e.marksOff {
+		e.marksOff = e.marksSel
+	}
+	if e.marksSel >= e.marksOff+body {
+		e.marksOff = e.marksSel - body + 1
+	}
+	if e.marksOff < 0 {
+		e.marksOff = 0
+	}
+
+	format := "absolute (a: relative)"
+	if e.marksRel {
+		format = "relative to CWD (a: absolute)"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\x1b[H")
+	sb.WriteString("\x1b[7m" + fit(fmt.Sprintf(" Marks (%d) — %s", len(e.marks), format), cols) + "\x1b[0m\r\n")
+
+	for i := 0; i < body; i++ {
+		sb.WriteString("\x1b[K")
+		idx := e.marksOff + i
+		switch {
+		case len(e.marks) == 0 && i == 0:
+			sb.WriteString(fit("  (no marks yet — press m in the explorer)", cols))
+		case idx < len(e.marks):
+			line := " " + displayPath(e.marks[idx], wd, !e.marksRel)
+			if idx == e.marksSel {
+				sb.WriteString("\x1b[7m" + fit(line, cols) + "\x1b[0m")
+			} else {
+				sb.WriteString(fit(line, cols))
+			}
+		}
+		sb.WriteString("\r\n")
+	}
+
+	foot := " ↑/↓ move  ↵ go  m unmark  a abs/rel  Esc back  q quit"
+	if e.status != "" {
+		foot = " " + e.status
+	}
+	sb.WriteString("\x1b[K\x1b[7m" + fit(foot, cols) + "\x1b[0m")
+	fmt.Fprint(e.tty, sb.String())
+}
+
 // headLabel is the top line for a directory: its path, totals, and a marker
 // when it has changed on disk since it was scanned.
 func headLabel(n *Node, stale bool) string {
@@ -721,14 +1002,13 @@ type styledSpan struct {
 	code string
 }
 
-// rowSpans builds the styled segments of one entry's row, mirroring the
-// non-interactive report's columns (see meter and label in report.go): a plain
-// right-aligned size, a dim percentage, a cyan usage bar, two spaces, and the
-// name — bold blue with a trailing slash for directories. The segments are
-// returned untruncated; fitSpans lays them out to the available width. The
-// concatenated text is identical to the old colorless row, so the layout is
-// unchanged when color is off.
-func rowSpans(n *Node, total int64) []styledSpan {
+// rowSpans builds the styled segments of one entry's row: a mark gutter ("* "
+// when staged, else blank), then the non-interactive report's columns (see meter
+// and label in report.go) — a plain right-aligned size, a dim percentage, a cyan
+// usage bar, two spaces, and the name (bold blue with a trailing slash for
+// directories). The segments are returned untruncated; fitSpans lays them out to
+// the available width.
+func rowSpans(n *Node, total int64, marked bool) []styledSpan {
 	frac := 0.0
 	if total > 0 {
 		frac = float64(n.Size) / float64(total)
@@ -739,7 +1019,12 @@ func rowSpans(n *Node, total int64) []styledSpan {
 		name += "/"
 		nameCode = "1;34"
 	}
+	gutter, gutterCode := "  ", ""
+	if marked {
+		gutter, gutterCode = "* ", "33" // a yellow star flags a staged entry
+	}
 	return []styledSpan{
+		{gutter, gutterCode},
 		{fmt.Sprintf("%10s ", humanize(n.Size)), ""},
 		{fmt.Sprintf("%4.0f%%", frac*100), "2"},
 		{" ", ""},

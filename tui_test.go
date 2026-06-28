@@ -315,3 +315,227 @@ func TestExplorerHidden(t *testing.T) {
 		t.Fatalf("hiding the selected dot entry should clamp to a visible one, got %v", e.selected())
 	}
 }
+
+// TestExplorerMarkToggle covers 'm': add/remove a mark, insertion order, and the
+// no-op on an empty directory.
+func TestExplorerMarkToggle(t *testing.T) {
+	root := &Node{Name: "root", IsDir: true, Size: 300, Children: []*Node{
+		{Name: "a", Path: "root/a", Size: 200},
+		{Name: "b", Path: "root/b", Size: 100},
+	}}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+
+	first := e.children()[0]
+	e.handle([]byte("m"))
+	if !e.marked[first.Path] || len(e.marks) != 1 || e.marks[0] != first.Path {
+		t.Fatalf("after m: marked=%v marks=%v", e.marked, e.marks)
+	}
+	e.handle([]byte("m")) // toggle off
+	if e.marked[first.Path] || len(e.marks) != 0 {
+		t.Fatalf("second m should unmark: marked=%v marks=%v", e.marked, e.marks)
+	}
+	// Mark both; order follows insertion.
+	e.set(0)
+	e.handle([]byte("m"))
+	e.set(1)
+	e.handle([]byte("m"))
+	if len(e.marks) != 2 || e.marks[0] != e.children()[0].Path || e.marks[1] != e.children()[1].Path {
+		t.Fatalf("marks order wrong: %v", e.marks)
+	}
+
+	empty := &Node{Name: "empty", IsDir: true}
+	ee := &explorer{stack: []*Node{empty}, sel: []int{0}, off: []int{0}}
+	ee.handle([]byte("m"))
+	if len(ee.marks) != 0 || ee.marked != nil {
+		t.Fatal("marking in an empty directory must be a no-op")
+	}
+	if ee.status != "nothing to mark" {
+		t.Fatalf("status = %q, want 'nothing to mark'", ee.status)
+	}
+}
+
+// TestMarkIndicator checks the leading gutter span rowSpans adds for marked rows.
+func TestMarkIndicator(t *testing.T) {
+	n := &Node{Name: "x", Size: 10}
+	if got := rowSpans(n, 100, true)[0].text; got != "* " {
+		t.Errorf("marked gutter = %q, want %q", got, "* ")
+	}
+	if got := rowSpans(n, 100, false)[0].text; got != "  " {
+		t.Errorf("unmarked gutter = %q, want %q", got, "  ")
+	}
+	if got := rowSpans(n, 100, false)[1].text; !strings.Contains(got, "10 B") {
+		t.Errorf("size span should still follow the gutter, got %q", got)
+	}
+}
+
+// TestJumpToLocation checks that jumping selects a mark inside its parent (for
+// files and directories), and fails gracefully on a missing path.
+func TestJumpToLocation(t *testing.T) {
+	x := &Node{Name: "x", Path: "root/sub/x", Size: 50}
+	sub := &Node{Name: "sub", Path: "root/sub", IsDir: true, Size: 50, Children: []*Node{x}}
+	root := &Node{Name: "root", Path: "root", IsDir: true, Size: 50, Children: []*Node{sub}}
+	sortChildren(root)
+	sortChildren(sub)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+
+	e.handle([]byte("l")) // into sub
+	e.handle([]byte("m")) // mark x
+	e.handle([]byte("h")) // back to root
+	if !e.jumpTo("root/sub/x") {
+		t.Fatal("jumpTo should find root/sub/x")
+	}
+	if len(e.stack) != 2 || e.cur().Name != "sub" || e.selected() == nil || e.selected().Name != "x" {
+		t.Fatalf("jump should select x in sub, got depth %d cur %q sel %v", len(e.stack), e.cur().Name, e.selected())
+	}
+	if e.sel[0] != 0 {
+		t.Fatalf("root cursor = %d, want 0 (sub)", e.sel[0])
+	}
+
+	// A directory target is selected in its parent, not opened.
+	if !e.jumpTo("root/sub") {
+		t.Fatal("jumpTo should find root/sub")
+	}
+	if len(e.stack) != 1 || e.cur().Name != "root" || e.selected().Name != "sub" {
+		t.Fatalf("jump to a dir should select it in root, got depth %d cur %q sel %v", len(e.stack), e.cur().Name, e.selected())
+	}
+
+	// Missing path: false, status set, stack unchanged.
+	before := len(e.stack)
+	if e.jumpTo("root/nope") {
+		t.Fatal("jumpTo on a missing path should fail")
+	}
+	if len(e.stack) != before || e.status == "" {
+		t.Fatal("a failed jump must leave the stack and set a status")
+	}
+}
+
+// TestJumpRevealsDotfile checks that jumping to a mark hidden by the dotfile
+// filter clears the filter so the target is reachable.
+func TestJumpRevealsDotfile(t *testing.T) {
+	x := &Node{Name: "x", Path: "root/.hidden/x", Size: 10}
+	hid := &Node{Name: ".hidden", Path: "root/.hidden", IsDir: true, Size: 10, Children: []*Node{x}}
+	vis := &Node{Name: "vis", Path: "root/vis", IsDir: true, Size: 20}
+	root := &Node{Name: "root", Path: "root", IsDir: true, Size: 30, Children: []*Node{vis, hid}}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, hideDot: true}
+	e.marked = map[string]bool{"root/.hidden/x": true}
+	e.marks = []string{"root/.hidden/x"}
+
+	if !e.jumpTo("root/.hidden/x") {
+		t.Fatal("jumpTo should find the dotfile target")
+	}
+	if e.hideDot {
+		t.Fatal("jumping into a dot path should reveal it (clear hideDot)")
+	}
+	if e.cur().Name != ".hidden" || e.selected() == nil || e.selected().Name != "x" {
+		t.Fatalf("expected x selected in .hidden, got cur %q sel %v", e.cur().Name, e.selected())
+	}
+}
+
+// TestUnmarkFromPanel checks that 'm' inside the panel removes the highlighted
+// mark and re-clamps the cursor.
+func TestUnmarkFromPanel(t *testing.T) {
+	root := &Node{Name: "root", IsDir: true, Children: []*Node{
+		{Name: "a", Path: "root/a", Size: 2},
+		{Name: "b", Path: "root/b", Size: 1},
+	}}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+	e.set(0)
+	e.handle([]byte("m"))
+	e.set(1)
+	e.handle([]byte("m"))
+	e.handle([]byte("M")) // open panel
+	if !e.marksView {
+		t.Fatal("M should open the marks panel")
+	}
+	e.marksSel = 1
+	e.handle([]byte("m")) // unmark within the panel
+	if len(e.marks) != 1 || e.marked["root/b"] || e.marks[0] != "root/a" {
+		t.Fatalf("panel m should unmark b: marks=%v", e.marks)
+	}
+	if e.marksSel != 0 {
+		t.Fatalf("marksSel = %d, want clamped to 0", e.marksSel)
+	}
+}
+
+// TestMarksPathFormatToggle checks 'p' flips the panel's path format.
+func TestMarksPathFormatToggle(t *testing.T) {
+	root := &Node{Name: "root", IsDir: true, Children: []*Node{{Name: "a", Path: "root/a", Size: 1}}}
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+	e.handle([]byte("m"))
+	e.handle([]byte("M"))
+	if e.marksRel {
+		t.Fatal("panel should start showing absolute paths")
+	}
+	e.handle([]byte("a"))
+	if !e.marksRel {
+		t.Fatal("a should toggle to relative")
+	}
+	e.handle([]byte("a"))
+	if e.marksRel {
+		t.Fatal("a should toggle back to absolute")
+	}
+}
+
+// TestMarksSurviveRescan checks that path-keyed marks persist across 'r' and the
+// fresh node re-binds to the star.
+func TestMarksSurviveRescan(t *testing.T) {
+	dir, err := os.MkdirTemp(".", "dutest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	writeFile(t, filepath.Join(dir, "a.txt"), 1000)
+
+	sc := &scanner{apparent: true}
+	root, err := scan(dir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
+
+	marked := e.selected()
+	e.handle([]byte("m"))
+	if !e.marked[marked.Path] {
+		t.Fatal("a.txt should be marked")
+	}
+
+	writeFile(t, filepath.Join(dir, "b.txt"), 2000)
+	e.handle([]byte("r"))
+	if !e.marked[marked.Path] {
+		t.Fatal("mark should survive a rescan (keyed by path)")
+	}
+	var fresh *Node
+	for _, c := range e.cur().Children {
+		if c.Path == marked.Path {
+			fresh = c
+		}
+	}
+	if fresh == nil {
+		t.Fatalf("fresh node for %q not found after rescan", marked.Path)
+	}
+	if rowSpans(fresh, e.cur().Size, e.marked[fresh.Path])[0].text != "* " {
+		t.Fatal("the rescanned node should render the mark gutter")
+	}
+}
+
+// TestMarkPaths covers the pure on-quit list: absolute conversion in order, and
+// nil for no marks.
+func TestMarkPaths(t *testing.T) {
+	got := markPaths([]string{"a/b.txt", "/etc/hosts"}, "/home/u/proj")
+	want := []string{"/home/u/proj/a/b.txt", "/etc/hosts"}
+	if len(got) != len(want) {
+		t.Fatalf("markPaths len %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("markPaths[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if markPaths(nil, "/home/u") != nil {
+		t.Error("empty marks should yield nil")
+	}
+}

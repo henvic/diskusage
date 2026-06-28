@@ -2,7 +2,8 @@
 
 A small, fast command-line tool that shows **where disk space goes** under a
 path, so you can decide what to clean up. Think `du` with sorting, bars, and an
-interactive explorer — using only the Go standard library, no dependencies.
+interactive explorer that opens by default — using only the Go standard library,
+no dependencies.
 
 ## Build
 
@@ -23,19 +24,21 @@ diskusage [flags] [path]
 ```
 
 With no path it scans the current directory. Size is measured in **allocated
-disk blocks** (matching `du`); pass `--apparent` for logical file sizes.
+disk blocks** (matching `du`); pass `--apparent` for logical file sizes. On a
+terminal it opens the interactive explorer by default; pass `--print` (or a
+format flag), or pipe the output, to print instead.
 
 ### Modes
 
 | Command                         | What it does                                       |
 | ------------------------------- | -------------------------------------------------- |
-| `diskusage`                     | Largest items directly under the path (default)    |
-| `diskusage -i`                  | Interactive explorer — drill in and out            |
+| `diskusage`                     | Interactive explorer — drill in and out (default)  |
+| `diskusage --print`             | Largest items directly under the path, printed     |
 | `diskusage --tree --depth 3`    | A size-sorted tree, three levels deep              |
 | `diskusage --files --limit 20`  | The 20 biggest individual files in the subtree     |
 | `diskusage --json`              | The full tree as JSON, for scripting               |
 
-### Interactive keys (`-i`)
+### Interactive keys
 
 ```
 ↑/↓ or j/k   move                →/Enter or l   open directory
@@ -69,6 +72,7 @@ guarantee. It needs no external dependencies.
 
 ### Useful flags
 
+- `-p`, `--print` — print output instead of opening the interactive explorer.
 - `--apparent` — logical file size instead of disk blocks.
 - `--min 100M` — hide entries smaller than a size (`K`, `M`, `G`, `T`).
 - `--limit N` — cap the number of entries shown.
@@ -81,8 +85,9 @@ guarantee. It needs no external dependencies.
 ## Examples
 
 ```sh
-diskusage ~/Downloads              # what's filling Downloads?
-diskusage -i /                     # explore the whole disk
+diskusage ~/Downloads              # what's filling Downloads? (interactive)
+diskusage /                        # explore the whole disk
+diskusage --print ~/Downloads      # print the summary instead of exploring
 diskusage --files --limit 30 ~     # the 30 biggest files under home
 diskusage --min 1G --tree /var     # only the big stuff in /var, as a tree
 diskusage --json . | jq '.children[0]'
@@ -94,4 +99,4 @@ diskusage --json . | jq '.children[0]'
   `--exclude`, or scan a narrower path.
 - Disk-block accounting and `-x`/one-filesystem need Unix `stat`; on other
   platforms it falls back to apparent size. The interactive explorer is
-  Unix-only.
+  Unix-only; elsewhere (and when output is piped) diskusage prints the summary.

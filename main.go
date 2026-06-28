@@ -14,14 +14,14 @@ import (
 
 // options holds everything parsed from the command line.
 type options struct {
-	interactive bool
-	tree        bool
-	files       bool
-	jsonOut     bool
-	apparent    bool
-	follow      bool
-	oneFS       bool
-	noColor     bool
+	printOut bool
+	tree     bool
+	files    bool
+	jsonOut  bool
+	apparent bool
+	follow   bool
+	oneFS    bool
+	noColor  bool
 
 	depth    int
 	limit    int
@@ -34,6 +34,56 @@ type multiFlag []string
 
 func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// outputMode is the view diskusage produces for a run.
+type outputMode int
+
+const (
+	modeInteractive outputMode = iota // the interactive explorer (TUI)
+	modeSummary                       // largest items directly under the path
+	modeTree                          // size-sorted tree
+	modeFiles                         // largest individual files
+	modeJSON                          // the full tree as JSON
+)
+
+func (m outputMode) String() string {
+	switch m {
+	case modeInteractive:
+		return "interactive"
+	case modeSummary:
+		return "summary"
+	case modeTree:
+		return "tree"
+	case modeFiles:
+		return "files"
+	case modeJSON:
+		return "json"
+	default:
+		return "unknown"
+	}
+}
+
+// resolveMode picks the output mode from the parsed flags and whether stdout is a
+// terminal. With no format flag it defaults to the interactive explorer on a
+// terminal and the printed summary otherwise, so piped or redirected output stays
+// non-interactive.
+func resolveMode(o options, stdoutTTY bool) outputMode {
+	switch {
+	case o.jsonOut:
+		return modeJSON
+	case o.tree:
+		return modeTree
+	case o.files:
+		return modeFiles
+	case o.printOut:
+		return modeSummary
+	default:
+		if stdoutTTY {
+			return modeInteractive
+		}
+		return modeSummary
+	}
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -49,8 +99,8 @@ func run() error {
 		excl   multiFlag
 	)
 
-	flag.BoolVar(&o.interactive, "i", false, "explore interactively (TUI)")
-	flag.BoolVar(&o.interactive, "interactive", false, "explore interactively (TUI)")
+	flag.BoolVar(&o.printOut, "p", false, "print output instead of the interactive explorer")
+	flag.BoolVar(&o.printOut, "print", false, "print output instead of the interactive explorer")
 	flag.BoolVar(&o.tree, "tree", false, "print a size-sorted tree")
 	flag.BoolVar(&o.files, "files", false, "list the largest files in the subtree")
 	flag.BoolVar(&o.jsonOut, "json", false, "emit the full tree as JSON")
@@ -95,25 +145,22 @@ func run() error {
 		return err
 	}
 
-	switch {
-	case o.jsonOut:
+	switch resolveMode(o, isTTY(os.Stdout)) {
+	case modeJSON:
 		return printJSON(root)
-	case o.interactive:
-		if !isTTY(os.Stdout) {
-			fmt.Fprintln(os.Stderr, "diskusage: stdout is not a terminal; printing summary instead")
-			printSummary(root, path, o)
-			return nil
-		}
+	case modeTree:
+		printTree(root, path, o)
+	case modeFiles:
+		printFiles(root, path, o)
+	case modeInteractive:
+		// On non-Unix the runTUI stub returns an error, and /dev/tty can fail to
+		// open; either way fall back to the printed summary — silently, since
+		// interactive mode is only ever the default, never explicitly requested.
 		if err := runTUI(root, path, s); err != nil {
-			fmt.Fprintln(os.Stderr, "diskusage: interactive mode unavailable:", err)
 			printSummary(root, path, o)
 		}
 		return nil
-	case o.files:
-		printFiles(root, path, o)
-	case o.tree:
-		printTree(root, path, o)
-	default:
+	default: // modeSummary
 		printSummary(root, path, o)
 	}
 	return nil
@@ -126,14 +173,15 @@ Usage:
   diskusage [flags] [path]
 
 With no path it scans the current directory. Size is measured in allocated disk
-blocks (matching du); pass --apparent for logical file sizes. The default output
-is a breakdown of the largest items directly under the path.
+blocks (matching du); pass --apparent for logical file sizes. On a terminal it
+opens an interactive explorer by default; with --print or a format flag, or when
+output is piped, it prints instead.
 
 Flags:
 `)
 	flag.PrintDefaults()
 	fmt.Fprint(os.Stderr, `
-Interactive keys (-i):
+Interactive keys:
   ↑/↓ or j/k  move           →/Enter or l  open dir   ←/h/Esc  go up (back)
   c / C  copy absolute / relative path     f  open folder in Finder
   r  rescan from disk        g/G  first/last           ?  show keys
@@ -141,9 +189,9 @@ Interactive keys (-i):
 A ● in the header marks the current directory as changed on disk since scanned.
 
 Examples:
-  diskusage                       breakdown of the current directory
-  diskusage ~/Downloads           breakdown of a specific path
-  diskusage -i /                  explore the whole disk interactively
+  diskusage                       explore the current directory
+  diskusage ~/Downloads           explore a specific path
+  diskusage -p                    print the summary instead of exploring
   diskusage --tree --depth 3 .    a three-level size tree
   diskusage --files --limit 20 ~  the 20 biggest files under home
   diskusage --min 100M ~          only entries of at least 100 MiB

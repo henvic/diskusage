@@ -227,7 +227,7 @@ func printSummary(root *Node, path string, o options) {
 		fmt.Println(paint("(empty)", "2"))
 	}
 	if isTTY(os.Stdout) {
-		fmt.Printf("\n%s\n", paint("tip: -i to explore interactively · --tree for a tree · --files for the biggest files", "2"))
+		fmt.Printf("\n%s\n", paint("tip: --tree for a tree · --files for the biggest files · --json to script", "2"))
 	}
 }
 

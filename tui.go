@@ -33,6 +33,7 @@ type explorer struct {
 	baseDir string // path the baseline fingerprint belongs to
 	flash   bool   // briefly highlight the selected row (copy feedback)
 	help    bool   // the key reference overlay is showing
+	hideDot bool   // hide dot ("hidden") entries from the listing
 }
 
 // runTUI drives the interactive explorer on the controlling terminal. It always
@@ -272,6 +273,8 @@ func (e *explorer) handle(b []byte) bool {
 			e.ascend()
 		case 'r':
 			e.rescan()
+		case '.':
+			e.toggleHidden()
 		case 'g':
 			e.set(0)
 		case 'G':
@@ -281,14 +284,87 @@ func (e *explorer) handle(b []byte) bool {
 	return false
 }
 
-// selected returns the entry the cursor is on, or nil when the directory is
-// empty.
+// visible returns n's children filtered for display: all of them, or only the
+// non-dot entries when hideDot is set. The scanned tree and every node's totals
+// are never mutated — hiding is purely a view concern.
+func (e *explorer) visible(n *Node) []*Node {
+	if !e.hideDot {
+		return n.Children
+	}
+	out := make([]*Node, 0, len(n.Children))
+	for _, c := range n.Children {
+		if !strings.HasPrefix(c.Name, ".") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// children is the visible entries of the directory currently on screen.
+func (e *explorer) children() []*Node { return e.visible(e.cur()) }
+
+// hiddenSize totals the immediate dot entries kept out of the current listing,
+// so the header can report how much space the filter is hiding. It is 0 when the
+// filter is off or the directory has no dot entries.
+func (e *explorer) hiddenSize() int64 {
+	if !e.hideDot {
+		return 0
+	}
+	var n int64
+	for _, c := range e.cur().Children {
+		if strings.HasPrefix(c.Name, ".") {
+			n += c.Size
+		}
+	}
+	return n
+}
+
+// toggleHidden flips the dotfile filter, keeping each level's cursor on the same
+// entry where it stays visible (and clamped into range otherwise).
+func (e *explorer) toggleHidden() {
+	// Remember the selected entry at every level before the visible set changes.
+	target := make([]*Node, len(e.stack))
+	for d := range e.stack {
+		if kids := e.visible(e.stack[d]); e.sel[d] >= 0 && e.sel[d] < len(kids) {
+			target[d] = kids[e.sel[d]]
+		}
+	}
+	e.hideDot = !e.hideDot
+	for d := range e.stack {
+		kids := e.visible(e.stack[d])
+		sel := 0
+		for i, c := range kids {
+			if c == target[d] {
+				sel = i
+				break
+			}
+		}
+		if sel >= len(kids) {
+			sel = len(kids) - 1
+		}
+		if sel < 0 {
+			sel = 0
+		}
+		e.sel[d] = sel
+	}
+	if e.hideDot {
+		e.status = "hiding dotfiles"
+	} else {
+		e.status = "showing all entries"
+	}
+}
+
+// selected returns the entry the cursor is on, or nil when the listing is empty.
 func (e *explorer) selected() *Node {
-	cur := e.cur()
-	if len(cur.Children) == 0 {
+	kids := e.children()
+	if len(kids) == 0 {
 		return nil
 	}
-	return cur.Children[e.sel[len(e.sel)-1]]
+	i := e.sel[len(e.sel)-1]
+	if i >= len(kids) {
+		i = len(kids) - 1
+	}
+	return kids[i]
 }
 
 // copyPath puts the selected entry's path (or the current directory's, if the
@@ -449,12 +525,12 @@ func (e *explorer) rescan() {
 }
 
 // last selects the final entry in the current directory.
-func (e *explorer) last() { e.set(len(e.cur().Children) - 1) }
+func (e *explorer) last() { e.set(len(e.children()) - 1) }
 
 func (e *explorer) move(d int) { e.set(e.sel[len(e.sel)-1] + d) }
 
 func (e *explorer) set(i int) {
-	n := len(e.cur().Children)
+	n := len(e.children())
 	if n == 0 {
 		e.sel[len(e.sel)-1] = 0
 		return
@@ -470,11 +546,15 @@ func (e *explorer) set(i int) {
 
 // descend opens the selected directory.
 func (e *explorer) descend() {
-	cur := e.cur()
-	if len(cur.Children) == 0 {
+	kids := e.children()
+	if len(kids) == 0 {
 		return
 	}
-	child := cur.Children[e.sel[len(e.sel)-1]]
+	i := e.sel[len(e.sel)-1]
+	if i >= len(kids) {
+		i = len(kids) - 1
+	}
+	child := kids[i]
 	if !child.IsDir {
 		return
 	}
@@ -509,9 +589,18 @@ func (e *explorer) render() {
 	}
 	cur := e.cur()
 	total := cur.Size
+	kids := e.children()
 	body := rows - 2
 
 	sel := e.sel[len(e.sel)-1]
+	if sel >= len(kids) {
+		sel = len(kids) - 1
+	}
+	if sel < 0 {
+		sel = 0
+	}
+	e.sel[len(e.sel)-1] = sel
+
 	off := e.off[len(e.off)-1]
 	if sel < off {
 		off = sel
@@ -527,16 +616,23 @@ func (e *explorer) render() {
 	var sb strings.Builder
 	sb.WriteString("\x1b[H")
 
-	sb.WriteString("\x1b[7m" + fit(headLabel(cur, e.stale), cols) + "\x1b[0m\r\n")
+	head := headLabel(cur, e.stale)
+	if e.hideDot {
+		head += "   · dotfiles hidden"
+		if h := e.hiddenSize(); h > 0 {
+			head += fmt.Sprintf(" (%s, %.0f%%)", humanize(h), float64(h)/float64(total)*100)
+		}
+	}
+	sb.WriteString("\x1b[7m" + fit(head, cols) + "\x1b[0m\r\n")
 
 	for i := 0; i < body; i++ {
 		idx := off + i
 		sb.WriteString("\x1b[K")
-		if idx >= len(cur.Children) {
+		if idx >= len(kids) {
 			sb.WriteString("\r\n")
 			continue
 		}
-		spans := rowSpans(cur.Children[idx], total)
+		spans := rowSpans(kids[idx], total)
 		if idx == sel {
 			// The highlighted row sits under a row-wide reverse-video (or flash)
 			// highlight, so its spans carry no color resets that would cut the
@@ -560,8 +656,8 @@ func (e *explorer) render() {
 	}
 
 	pos := "0/0"
-	if len(cur.Children) > 0 {
-		pos = fmt.Sprintf("%d/%d", sel+1, len(cur.Children))
+	if len(kids) > 0 {
+		pos = fmt.Sprintf("%d/%d", sel+1, len(kids))
 	}
 	foot := fmt.Sprintf(" ↑/↓ move  → open  ← back  c copy  f Finder  r refresh  ? help  q quit    %s", pos)
 	if e.status != "" {
@@ -583,6 +679,7 @@ func (e *explorer) renderHelp(rows, cols int) {
 		"  C                 copy relative path",
 		"  f                 open folder in Finder",
 		"  r                 rescan from disk",
+		"  .                 show/hide dotfiles",
 		"  ?                 toggle this help",
 		"  q                 quit",
 	}

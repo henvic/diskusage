@@ -259,3 +259,59 @@ func TestHeadLabel(t *testing.T) {
 		t.Error("a stale directory header should carry the marker")
 	}
 }
+
+// TestExplorerHidden covers the '.' dotfile filter: it hides dot entries, keeps
+// the cursor on the same entry (clamping when that entry becomes hidden), and
+// never mutates the scanned tree or its totals.
+func TestExplorerHidden(t *testing.T) {
+	root := &Node{Name: "root", IsDir: true, Size: 300, Children: []*Node{
+		{Name: "visible", Size: 200},
+		{Name: ".hidden", Size: 100},
+	}}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+
+	if got := len(e.children()); got != 2 {
+		t.Fatalf("showing all: %d entries, want 2", got)
+	}
+
+	// Cursor on the visible entry; hiding keeps it there.
+	e.set(0) // 'visible' (200) sorts first
+	if e.selected().Name != "visible" {
+		t.Fatalf("setup: cursor on %q, want visible", e.selected().Name)
+	}
+	e.handle([]byte("."))
+	if !e.hideDot {
+		t.Fatal(". should enable the dotfile filter")
+	}
+	if got := e.children(); len(got) != 1 || got[0].Name != "visible" {
+		t.Fatalf("hidden: %d entries, want 1 (visible)", len(got))
+	}
+	if got := e.hiddenSize(); got != 100 {
+		t.Fatalf("hiddenSize = %d, want 100 (the .hidden entry)", got)
+	}
+	if e.selected() == nil || e.selected().Name != "visible" {
+		t.Fatalf("cursor should stay on 'visible', got %v", e.selected())
+	}
+	if root.Size != 300 || len(root.Children) != 2 {
+		t.Fatal("hiding must not mutate the tree or its totals")
+	}
+
+	// Toggle back, move onto the dot entry, then hide: the cursor must clamp to a
+	// visible entry rather than dangle out of range.
+	e.handle([]byte("."))
+	if e.hideDot || len(e.children()) != 2 {
+		t.Fatal(". should toggle back to showing all")
+	}
+	if e.hiddenSize() != 0 {
+		t.Fatalf("hiddenSize with the filter off = %d, want 0", e.hiddenSize())
+	}
+	e.last() // '.hidden' (100) sorts last
+	if e.selected().Name != ".hidden" {
+		t.Fatalf("setup: cursor on %q, want .hidden", e.selected().Name)
+	}
+	e.handle([]byte("."))
+	if e.selected() == nil || e.selected().Name != "visible" {
+		t.Fatalf("hiding the selected dot entry should clamp to a visible one, got %v", e.selected())
+	}
+}

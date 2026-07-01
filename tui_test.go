@@ -258,6 +258,37 @@ func TestHeadLabel(t *testing.T) {
 	if !strings.Contains(headLabel(n, true), "●") {
 		t.Error("a stale directory header should carry the marker")
 	}
+	// The path now lives on its own line above; the totals line carries the size
+	// and counts, not the path.
+	if strings.Contains(headLabel(n, false), "/x") {
+		t.Error("the path should no longer be in the totals line")
+	}
+	if got := headLabel(n, false); !strings.Contains(got, "2.0 KiB") || !strings.Contains(got, "dirs") {
+		t.Errorf("totals line should carry the size and dirs, got %q", got)
+	}
+}
+
+// TestFitLeft checks the left-trimming width helper used for the path line.
+func TestFitLeft(t *testing.T) {
+	// Long: trimmed from the left with a leading ellipsis, exactly w wide, tail kept.
+	got := fitLeft("/a/b/c/current", 8)
+	if r := []rune(got); len(r) != 8 || r[0] != '…' {
+		t.Errorf("fitLeft long = %q, want width 8 starting with …", got)
+	}
+	if !strings.HasSuffix(got, "current") {
+		t.Errorf("fitLeft should keep the tail, got %q", got)
+	}
+	// Short: right-padded to w.
+	if got := fitLeft("ab", 5); got != "ab   " {
+		t.Errorf("fitLeft short = %q, want %q", got, "ab   ")
+	}
+	// Degenerate widths.
+	if got := fitLeft("abc", 1); len([]rune(got)) != 1 {
+		t.Errorf("fitLeft w=1 = %q, want 1 rune", got)
+	}
+	if got := fitLeft("abc", 0); got != "" {
+		t.Errorf("fitLeft w=0 = %q, want empty", got)
+	}
 }
 
 // TestExplorerHidden covers the '.' dotfile filter: it hides dot entries, keeps

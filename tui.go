@@ -26,6 +26,7 @@ type explorer struct {
 	off    []int
 	tty    *os.File
 	sc     *scanner // reused by 'r' to rescan with the same settings
+	wd     string   // the directory diskusage was launched from
 	status string   // transient message shown in the footer until the next key
 
 	stale   bool   // current directory changed on disk since it was scanned
@@ -86,8 +87,8 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 	fmt.Fprint(tty, "\x1b[?1049h\x1b[?25l") // enter alt screen, hide cursor
 
 	sortChildren(root)
-	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc}
 	wd, _ := os.Getwd() // launch dir; the program never chdirs, so it holds until quit
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc, wd: wd}
 
 	// Read keys in a goroutine so the main loop can also wake on a timer to
 	// re-check whether the current directory changed on disk.
@@ -448,8 +449,7 @@ func (e *explorer) copyPath(absolute bool) {
 	if target != nil {
 		raw = target.Path
 	}
-	wd, _ := os.Getwd()
-	path := displayPath(raw, wd, absolute)
+	path := displayPath(raw, e.wd, absolute)
 	if err := copyToClipboard(path); err != nil {
 		e.status = "copy failed: " + err.Error()
 		return
@@ -648,8 +648,8 @@ func (e *explorer) ascend() {
 // render paints one frame.
 func (e *explorer) render() {
 	rows, cols := e.size()
-	if rows < 3 {
-		rows = 3
+	if rows < 4 {
+		rows = 4
 	}
 	if cols < 20 {
 		cols = 20
@@ -665,7 +665,7 @@ func (e *explorer) render() {
 	cur := e.cur()
 	total := cur.Size
 	kids := e.children()
-	body := rows - 2
+	body := rows - 3
 
 	sel := e.sel[len(e.sel)-1]
 	if sel >= len(kids) {
@@ -699,6 +699,15 @@ func (e *explorer) render() {
 		}
 	}
 	sb.WriteString("\x1b[7m" + fit(head, cols) + "\x1b[0m\r\n")
+
+	// The path sits just above the listing it labels. It is bold rather than
+	// reverse video: reverse would cancel the terminal's own selection highlight,
+	// making the path impossible to see while you drag-select it to copy.
+	pathLine := fitLeft(" "+displayPath(cur.Path, e.wd, true), cols)
+	if useColor {
+		pathLine = "\x1b[1m" + pathLine + "\x1b[0m"
+	}
+	sb.WriteString(pathLine + "\r\n")
 
 	for i := 0; i < body; i++ {
 		idx := off + i
@@ -936,7 +945,6 @@ func (e *explorer) jumpTo(target string) bool {
 // renderMarks draws the marks panel: the staged paths (relative to the launch
 // dir, or absolute with 'p'), with the cursor row highlighted.
 func (e *explorer) renderMarks(rows, cols int) {
-	wd, _ := os.Getwd()
 	e.marksSet(e.marksSel) // keep the cursor in range after unmarking
 	body := rows - 2
 	if e.marksSel < e.marksOff {
@@ -965,7 +973,7 @@ func (e *explorer) renderMarks(rows, cols int) {
 		case len(e.marks) == 0 && i == 0:
 			sb.WriteString(fit("  (no marks yet — press m in the explorer)", cols))
 		case idx < len(e.marks):
-			line := " " + displayPath(e.marks[idx], wd, !e.marksRel)
+			line := " " + displayPath(e.marks[idx], e.wd, !e.marksRel)
 			if idx == e.marksSel {
 				sb.WriteString("\x1b[7m" + fit(line, cols) + "\x1b[0m")
 			} else {
@@ -983,11 +991,12 @@ func (e *explorer) renderMarks(rows, cols int) {
 	fmt.Fprint(e.tty, sb.String())
 }
 
-// headLabel is the top line for a directory: its path, totals, and a marker
-// when it has changed on disk since it was scanned.
+// headLabel is the second header line: the current directory's totals, plus a
+// marker when it has changed on disk since scanned. The absolute path is drawn on
+// the line above it.
 func headLabel(n *Node, stale bool) string {
-	s := fmt.Sprintf(" %s — %s · %s files · %s dirs",
-		n.Path, humanize(n.Size), comma(n.Files), comma(n.Dirs))
+	s := fmt.Sprintf(" %s · %s files · %s dirs",
+		humanize(n.Size), comma(n.Files), comma(n.Dirs))
 	if stale {
 		s += "   ● changed on disk — press r"
 	}
@@ -1107,6 +1116,20 @@ func fit(s string, w int) string {
 			return string(r[:w])
 		}
 		return string(r[:w-1]) + "…"
+	}
+	return s + strings.Repeat(" ", w-len(r))
+}
+
+// fitLeft is like fit but trims from the left with a leading ellipsis, so the
+// end of s — e.g. the current directory at the tail of a long path — stays
+// visible. It right-pads with spaces when s is shorter than w.
+func fitLeft(s string, w int) string {
+	r := []rune(s)
+	if len(r) > w {
+		if w <= 1 {
+			return string(r[len(r)-w:])
+		}
+		return "…" + string(r[len(r)-(w-1):])
 	}
 	return s + strings.Repeat(" ", w-len(r))
 }

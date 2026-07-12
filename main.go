@@ -148,6 +148,31 @@ func run() error {
 		oneFS:    o.oneFS,
 		excludes: o.excludes,
 	}
+	mode := resolveMode(o, isTTY(os.Stdout))
+
+	if mode == modeInteractive {
+		// The explorer opens immediately and browses snapshots of the tree
+		// while the scan fills it in the background.
+		root, done, err := scanStart(path, s)
+		if err != nil {
+			return err
+		}
+		marks, err := runTUI(root, path, s, done)
+		if err != nil {
+			// On non-Unix the runTUI stub returns an error, and /dev/tty can
+			// fail to open; either way fall back to the printed summary —
+			// silently, since interactive mode is only ever the default, never
+			// explicitly requested. The summary needs the finished tree.
+			withProgress(s, func() { <-done })
+			printSummary(root, path, o)
+			return nil
+		}
+		// Entries staged with 'm' print as absolute paths after the explorer exits.
+		for _, m := range marks {
+			fmt.Println(m)
+		}
+		return nil
+	}
 
 	var root *Node
 	withProgress(s, func() {
@@ -157,27 +182,13 @@ func run() error {
 		return err
 	}
 
-	switch resolveMode(o, isTTY(os.Stdout)) {
+	switch mode {
 	case modeJSON:
 		return printJSON(root)
 	case modeTree:
 		printTree(root, path, o)
 	case modeFiles:
 		printFiles(root, path, o)
-	case modeInteractive:
-		// On non-Unix the runTUI stub returns an error, and /dev/tty can fail to
-		// open; either way fall back to the printed summary — silently, since
-		// interactive mode is only ever the default, never explicitly requested.
-		marks, err := runTUI(root, path, s)
-		if err != nil {
-			printSummary(root, path, o)
-			return nil
-		}
-		// Entries staged with 'm' print as absolute paths after the explorer exits.
-		for _, m := range marks {
-			fmt.Println(m)
-		}
-		return nil
 	default: // modeSummary
 		printSummary(root, path, o)
 	}

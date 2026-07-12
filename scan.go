@@ -24,6 +24,10 @@ type Node struct {
 	Dirs     int64   `json:"dirs"`  // directories in the subtree, excluding self
 	Children []*Node `json:"children,omitempty"`
 	Err      string  `json:"error,omitempty"` // why the directory could not be read
+
+	// parent points up the tree so attach can fold each new entry into every
+	// ancestor's totals as it is discovered (nil at a scan root).
+	parent *Node
 }
 
 // scanner holds the configuration and shared counters for one scan. A zero
@@ -38,6 +42,10 @@ type scanner struct {
 	sem     chan struct{} // bounds the number of concurrent directory readers
 	scanned atomic.Int64  // entries visited so far (for progress)
 
+	// treeMu guards every mutation of published nodes (attach and root errors),
+	// so snapshot can pause the walk and copy an internally consistent tree.
+	treeMu sync.Mutex
+
 	// seen maps dev/ino identities already counted in this scan to the path
 	// that claimed them: hardlinked files (so their contents count once, like
 	// du) and, with -L, directories (so symlink cycles and repeated targets are
@@ -46,13 +54,26 @@ type scanner struct {
 	seen map[[2]uint64]string
 }
 
-// scan walks root and returns its tree. Directories are read concurrently up
-// to a bound derived from GOMAXPROCS.
+// scan walks root and returns its finished tree. Directories are read
+// concurrently up to a bound derived from GOMAXPROCS.
 func scan(root string, s *scanner) (*Node, error) {
+	n, done, err := scanStart(root, s)
+	if err != nil {
+		return nil, err
+	}
+	<-done
+	return n, nil
+}
+
+// scanStart begins a scan and returns the root node immediately, filling the
+// tree in the background; done closes when the walk finishes. While done is
+// open the tree is being mutated concurrently and may only be read through
+// snapshot, which pauses the walk for the duration of the copy.
+func scanStart(root string, s *scanner) (*Node, <-chan struct{}, error) {
 	// Follow the root itself even without -L: the user named it explicitly.
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	workers := runtime.GOMAXPROCS(0) * 2
@@ -68,15 +89,42 @@ func scan(root string, s *scanner) (*Node, error) {
 	// Remember the root so a -L symlink pointing back at it is not re-walked.
 	s.dupDir(info, root)
 
-	if !info.IsDir() {
-		n := &Node{Name: filepath.Base(root), Path: root}
-		n.Self = s.bytes(info)
-		n.Size = n.Self
+	done := make(chan struct{})
+	n := &Node{Name: filepath.Base(root), Path: root, IsDir: info.IsDir()}
+	n.Self = s.bytes(info)
+	n.Size = n.Self
+	s.scanned.Add(1)
+
+	if !n.IsDir {
 		n.Files = 1
-		s.scanned.Add(1)
-		return n, nil
+		close(done)
+		return n, done, nil
 	}
-	return s.dir(root, info), nil
+	go func() {
+		s.fill(n, root)
+		close(done)
+	}()
+	return n, done, nil
+}
+
+// snapshot deep-copies the tree under the accounting lock, pausing the walk,
+// so the copy is internally consistent and immutable from then on.
+func (s *scanner) snapshot(n *Node) *Node {
+	s.treeMu.Lock()
+	defer s.treeMu.Unlock()
+	return clone(n, nil)
+}
+
+func clone(n, parent *Node) *Node {
+	c := *n
+	c.parent = parent
+	if n.Children != nil {
+		c.Children = make([]*Node, len(n.Children))
+		for i, k := range n.Children {
+			c.Children[i] = clone(k, &c)
+		}
+	}
+	return &c
 }
 
 // bytes reports how many bytes info occupies under the active measure.
@@ -90,38 +138,19 @@ func (s *scanner) bytes(info fs.FileInfo) int64 {
 	return info.Size()
 }
 
-// dir scans a single directory and returns its node, recursing (concurrently)
-// into subdirectories.
-func (s *scanner) dir(path string, info fs.FileInfo) *Node {
-	n := &Node{Name: filepath.Base(path), Path: path, IsDir: true}
-	n.Self = s.bytes(info)
-	n.Size = n.Self
-	s.scanned.Add(1)
-
+// fill reads path's entries into the already-published node n, recursing
+// (concurrently) into subdirectories. Directories are attached before they are
+// walked, so a snapshot taken mid-scan shows them growing in place.
+func (s *scanner) fill(n *Node, path string) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
+		s.treeMu.Lock()
 		n.Err = err.Error()
-		return n
+		s.treeMu.Unlock()
+		return
 	}
 
-	var (
-		wg sync.WaitGroup
-		mu sync.Mutex
-	)
-	// add folds a finished child into n. Siblings may run concurrently, so all
-	// mutations of n go through the mutex.
-	add := func(child *Node) {
-		mu.Lock()
-		n.Children = append(n.Children, child)
-		n.Size += child.Size
-		n.Files += child.Files
-		n.Dirs += child.Dirs
-		if child.IsDir {
-			n.Dirs++
-		}
-		mu.Unlock()
-	}
-
+	var wg sync.WaitGroup
 	for _, e := range entries {
 		name := e.Name()
 		childPath := filepath.Join(path, name)
@@ -149,24 +178,29 @@ func (s *scanner) dir(path string, info fs.FileInfo) *Node {
 					continue
 				}
 			}
+			child := &Node{Name: name, Path: childPath, IsDir: true}
 			if s.dupDir(ci, childPath) {
 				// -L led back to a directory this scan already walked; list it
 				// empty so it still shows up but nothing is counted twice.
-				add(&Node{Name: name, Path: childPath, IsDir: true})
+				s.attach(n, child)
 				continue
 			}
+			child.Self = s.bytes(ci)
+			child.Size = child.Self
+			s.attach(n, child)
+			s.scanned.Add(1)
 			// Spawn a worker if a slot is free, otherwise recurse inline. The
 			// non-blocking select keeps concurrency bounded without deadlock.
 			select {
 			case s.sem <- struct{}{}:
 				wg.Add(1)
-				go func(p string, fi fs.FileInfo) {
+				go func(c *Node, p string) {
 					defer wg.Done()
 					defer func() { <-s.sem }()
-					add(s.dir(p, fi))
-				}(childPath, ci)
+					s.fill(c, p)
+				}(child, childPath)
 			default:
-				add(s.dir(childPath, ci))
+				s.fill(child, childPath)
 			}
 			continue
 		}
@@ -180,12 +214,30 @@ func (s *scanner) dir(path string, info fs.FileInfo) *Node {
 		}
 		child.Size = child.Self
 		child.Files = 1
-		add(child)
+		s.attach(n, child)
 		s.scanned.Add(1)
 	}
 
 	wg.Wait()
-	return n
+}
+
+// attach publishes child under parent and folds its own weight (Self, plus one
+// file or directory) into every ancestor, so partially scanned directories
+// always report the totals discovered so far. Descendants attached later fold
+// themselves in the same way, which reproduces the finished-tree invariant
+// Size = Self + sum of children's Size.
+func (s *scanner) attach(parent, child *Node) {
+	s.treeMu.Lock()
+	child.parent = parent
+	parent.Children = append(parent.Children, child)
+	for p := parent; p != nil; p = p.parent {
+		p.Size += child.Self
+		p.Files += child.Files
+		if child.IsDir {
+			p.Dirs++
+		}
+	}
+	s.treeMu.Unlock()
 }
 
 // dupFile reports whether info is a file whose contents were already counted

@@ -634,6 +634,92 @@ func TestSS3Sequences(t *testing.T) {
 	}
 }
 
+// TestAdopt checks swapping in a fresh snapshot: the open directory is
+// reopened by path, the cursor follows the same entry to its new sort
+// position, and a level missing from the new tree truncates the stack.
+func TestAdopt(t *testing.T) {
+	oldSub := &Node{Name: "sub", Path: "root/sub", IsDir: true, Size: 100, Children: []*Node{
+		{Name: "x", Path: "root/sub/x", Size: 60},
+		{Name: "y", Path: "root/sub/y", Size: 40},
+	}}
+	oldRoot := &Node{Name: "root", Path: "root", IsDir: true, Size: 150, Children: []*Node{
+		oldSub,
+		{Name: "a", Path: "root/a", Size: 50},
+	}}
+	sortChildren(oldRoot)
+	sortChildren(oldSub)
+	e := &explorer{stack: []*Node{oldRoot, oldSub}, sel: []int{0, 1}, off: []int{0, 0}}
+	if e.selected().Path != "root/sub/y" {
+		t.Fatalf("setup: cursor on %q, want root/sub/y", e.selected().Path)
+	}
+
+	// The snapshot grew: y ballooned (flipping the sort) and z appeared.
+	newSub := &Node{Name: "sub", Path: "root/sub", IsDir: true, Size: 300, Children: []*Node{
+		{Name: "x", Path: "root/sub/x", Size: 60},
+		{Name: "y", Path: "root/sub/y", Size: 200},
+		{Name: "z", Path: "root/sub/z", Size: 40},
+	}}
+	newRoot := &Node{Name: "root", Path: "root", IsDir: true, Size: 350, Children: []*Node{
+		{Name: "a", Path: "root/a", Size: 50},
+		newSub,
+	}}
+	e.adopt(newRoot)
+	if len(e.stack) != 2 || e.cur().Path != "root/sub" {
+		t.Fatalf("adopt should reopen root/sub, got depth %d cur %q", len(e.stack), e.cur().Path)
+	}
+	if got := e.selected(); got == nil || got.Path != "root/sub/y" {
+		t.Fatalf("cursor should follow y to its new position, got %v", got)
+	}
+	if e.sel[1] != 0 {
+		t.Errorf("y now sorts first, sel = %d, want 0", e.sel[1])
+	}
+
+	// A tree without the open directory truncates back to the root.
+	bare := &Node{Name: "root", Path: "root", IsDir: true}
+	e.adopt(bare)
+	if len(e.stack) != 1 || e.cur() != bare {
+		t.Fatalf("adopt of a bare tree should land at its root, got depth %d", len(e.stack))
+	}
+}
+
+// TestRenderScanningBanner checks the header carries the live progress counter
+// while the scan is running.
+func TestRenderScanningBanner(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "tty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	root := &Node{Name: "root", Path: "root", IsDir: true, Size: 10, Children: []*Node{
+		{Name: "a", Path: "root/a", Size: 10},
+	}}
+	sc := &scanner{}
+	sc.scanned.Store(1234)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0},
+		tty: f, sc: sc, scanning: true, rows: 10, cols: 100}
+
+	e.render()
+	frame, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(frame), "scanning… 1,234 items") {
+		t.Errorf("scanning header missing from frame: %q", frame)
+	}
+}
+
+// TestRescanWhileScanning checks that 'r' is refused while the initial scan is
+// still filling the tree.
+func TestRescanWhileScanning(t *testing.T) {
+	root := &Node{Name: "root", Path: "root", IsDir: true, Children: []*Node{{Name: "a", Size: 1}}}
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, scanning: true}
+	e.handle([]byte("r"))
+	if !strings.Contains(e.status, "scanning") {
+		t.Errorf("r during the scan should explain itself, status = %q", e.status)
+	}
+}
+
 // TestMarkPaths covers the pure on-quit list: absolute conversion in order, and
 // nil for no marks.
 func TestMarkPaths(t *testing.T) {

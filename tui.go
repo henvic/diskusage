@@ -31,6 +31,8 @@ type explorer struct {
 
 	rows, cols int // terminal size, measured at startup and again on SIGWINCH
 
+	scanning bool // the initial scan is still running; the stack holds snapshots
+
 	stale   bool   // current directory changed on disk since it was scanned
 	baseSig uint64 // fingerprint of the current dir at scan/rescan time
 	baseDir string // path the baseline fingerprint belongs to
@@ -51,8 +53,11 @@ type explorer struct {
 }
 
 // runTUI drives the interactive explorer on the controlling terminal. It always
-// restores the terminal, even on Ctrl-C.
-func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
+// restores the terminal, even on Ctrl-C. root may still be filling in: until
+// done closes, the explorer browses periodic snapshots of the tree (the live
+// nodes are only safe to read through scanner.snapshot), then it adopts the
+// finished tree.
+func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}) ([]string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -106,9 +111,23 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 	enter := func() { fmt.Fprint(tty, "\x1b[?1049h\x1b[?25l\x1b[?7l") }
 	enter()
 
-	sortChildren(root)
+	// While the scan is still running, browse a private snapshot; the live tree
+	// is mutated concurrently and is only read via scanner.snapshot.
+	scanning := true
+	select {
+	case <-done:
+		scanning = false
+	default:
+	}
+	browse := root
+	if scanning {
+		browse = sc.snapshot(root)
+	}
+	sortChildren(browse)
+
 	wd, _ := os.Getwd() // launch dir; the program never chdirs, so it holds until quit
-	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc, wd: wd}
+	e := &explorer{stack: []*Node{browse}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc, wd: wd}
+	e.scanning = scanning
 	e.measure()
 
 	// repaint re-measures and redraws from scratch, for the paths where the
@@ -120,9 +139,10 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 	}
 
 	// Read keys in a goroutine so the main loop can also wake on a timer to
-	// re-check whether the current directory changed on disk.
-	done := make(chan struct{})
-	defer close(done)
+	// refresh the scan snapshot or re-check whether the directory changed on
+	// disk.
+	stop := make(chan struct{})
+	defer close(stop)
 	keys := make(chan []byte, 8)
 	go func() {
 		b := make([]byte, 16)
@@ -133,7 +153,7 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 				copy(k, b[:n])
 				select {
 				case keys <- k:
-				case <-done:
+				case <-stop:
 					return
 				}
 			}
@@ -144,8 +164,9 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 		}
 	}()
 
-	ticker := time.NewTicker(750 * time.Millisecond)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	var nextSnap time.Time
 
 	e.ensureBaseline()
 	e.render()
@@ -161,9 +182,27 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 			e.ensureBaseline()
 			e.render()
 		case <-ticker.C:
-			if e.pollStale() {
+			if e.scanning {
+				if time.Now().After(nextSnap) {
+					start := time.Now()
+					e.adopt(e.sc.snapshot(root))
+					// Copying pauses the walk, so back off to at least 5x the
+					// copy cost: snapshotting a huge tree must never dominate
+					// the scan it is showing.
+					nextSnap = time.Now().Add(5 * time.Since(start))
+					e.render()
+				}
+			} else if e.pollStale() {
 				e.render()
 			}
+		case <-done:
+			done = nil // a closed channel would fire on every loop iteration
+			e.scanning = false
+			e.adopt(root) // the live tree is quiescent now; browse it directly
+			e.baseDir = ""
+			e.ensureBaseline()
+			e.status = "scan complete"
+			e.render()
 		case <-winch:
 			repaint()
 		case <-quit:
@@ -186,10 +225,63 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 // repeat per frame, so this runs once at startup and on SIGWINCH.
 func (e *explorer) measure() { e.rows, e.cols = e.size() }
 
+// adopt swaps the tree the explorer is browsing — a fresh snapshot mid-scan,
+// or the live tree once the scan completes — reopening the same directory path
+// and keeping each level's cursor on the same entry. Entries only ever appear
+// during a scan, so the open path always still exists; a level is dropped only
+// if the new tree genuinely lacks it.
+func (e *explorer) adopt(root *Node) {
+	// Remember where the cursor sits at every open level, by path.
+	want := make([]string, len(e.stack))
+	for d := range e.stack {
+		if kids := e.visible(e.stack[d]); len(kids) > 0 {
+			i := e.sel[d]
+			if i >= len(kids) {
+				i = len(kids) - 1
+			}
+			if i < 0 {
+				i = 0
+			}
+			want[d] = kids[i].Path
+		}
+	}
+
+	sortChildren(root)
+	stack, sel, off := []*Node{root}, []int{0}, []int{0}
+	for d := 1; d < len(e.stack); d++ {
+		var next *Node
+		for _, c := range stack[d-1].Children {
+			if c.Path == e.stack[d].Path {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			break
+		}
+		sortChildren(next)
+		stack = append(stack, next)
+		sel = append(sel, 0)
+		off = append(off, e.off[d])
+	}
+	for d := range stack {
+		for i, c := range e.visible(stack[d]) {
+			if c.Path == want[d] {
+				sel[d] = i
+				break
+			}
+		}
+	}
+	e.stack, e.sel, e.off = stack, sel, off
+}
+
 // ensureBaseline records the on-disk fingerprint of the current directory the
 // first time it is shown (and after a rescan), so later polls can tell whether
 // it has changed since.
 func (e *explorer) ensureBaseline() {
+	if e.scanning {
+		return // everything is provisional until the scan itself finishes
+	}
 	cur := e.cur()
 	if cur.Path != e.baseDir {
 		e.baseSig = dirSig(cur.Path)
@@ -204,6 +296,9 @@ func (e *explorer) ensureBaseline() {
 // size/mtime changes of immediate entries. Changes nested deeper are only seen
 // by rescanning ('r').
 func (e *explorer) pollStale() bool {
+	if e.scanning {
+		return false
+	}
 	e.ensureBaseline()
 	was := e.stale
 	e.stale = dirSig(e.cur().Path) != e.baseSig
@@ -602,6 +697,10 @@ func openInFileManager(path string) error {
 // are reflected. At the root this is a full refresh; deeper it only re-walks
 // the current subtree.
 func (e *explorer) rescan() {
+	if e.scanning {
+		e.status = "still scanning — everything refreshes as it goes"
+		return
+	}
 	cur := e.cur()
 	if !cur.IsDir {
 		return
@@ -761,6 +860,9 @@ func (e *explorer) render() {
 	sb.WriteString("\x1b[H")
 
 	head := headLabel(cur, e.stale)
+	if e.scanning && e.sc != nil {
+		head += fmt.Sprintf("   ⟳ scanning… %s items", comma(e.sc.scanned.Load()))
+	}
 	if e.hideDot {
 		head += "   · dotfiles hidden"
 		if h := e.hiddenSize(); h > 0 {
@@ -784,7 +886,10 @@ func (e *explorer) render() {
 		if idx >= len(kids) {
 			if len(kids) == 0 && i == 0 {
 				msg := " (empty)"
-				if e.hideDot && len(cur.Children) > 0 {
+				switch {
+				case e.scanning:
+					msg = " (scanning…)"
+				case e.hideDot && len(cur.Children) > 0:
 					msg = " (only dotfiles — press . to show them)"
 				}
 				sb.WriteString(paint(msg, "2"))

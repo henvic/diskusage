@@ -72,7 +72,12 @@ path is no longer in the scanned tree (deleted, then rescanned away) is dimmed
 and tagged as gone. On quit, every marked path is printed to standard output as
 an absolute path, one per line. Marks last for the session only.
 
-The tree is a snapshot taken when the scan ran, so edits you make on disk
+The explorer opens immediately, while the scan is still running: the listing
+fills in and sizes grow in place, with a `⟳ scanning` counter in the header.
+Sizes, percentages, and sort order are provisional until the counter
+disappears; `r` (rescan) waits until then.
+
+Once the scan completes, the tree is a snapshot, so edits you make on disk
 afterwards are not shown until you press `r`. `r` rescans the directory you are
 currently viewing — a full refresh at the root, or just the current subtree
 deeper in — and updates the totals all the way up.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,6 +90,76 @@ func TestParseSize(t *testing.T) {
 	}
 	if _, err := parseSize("9999999999P"); err == nil {
 		t.Error("parseSize should reject a size that overflows int64")
+	}
+}
+
+// TestSnapshotWhileScanning hammers snapshot against a live scan: every copy
+// must be internally consistent (Size = Self + the children's sizes at every
+// node), and the finished tree must carry the exact totals.
+func TestSnapshotWhileScanning(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 20; i++ {
+		sub := filepath.Join(dir, fmt.Sprintf("d%02d", i))
+		if err := os.Mkdir(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for j := 0; j < 20; j++ {
+			writeFile(t, filepath.Join(sub, fmt.Sprintf("f%02d", j)), 10)
+		}
+	}
+
+	sc := &scanner{apparent: true}
+	root, done, err := scanStart(dir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		select {
+		case <-done:
+			if root.Files != 400 || root.Dirs != 20 {
+				t.Errorf("finished tree has %d files, %d dirs, want 400 and 20", root.Files, root.Dirs)
+			}
+			var sum int64
+			walk(root, func(n *Node) {
+				if !n.IsDir {
+					sum += n.Size
+				}
+			})
+			if sum != 4000 {
+				t.Errorf("file bytes = %d, want 4000", sum)
+			}
+			return
+		default:
+			snap := sc.snapshot(root)
+			walk(snap, func(n *Node) {
+				var kids int64
+				for _, c := range n.Children {
+					kids += c.Size
+				}
+				if n.Size != n.Self+kids {
+					t.Fatalf("inconsistent snapshot at %s: size %d != self %d + children %d",
+						n.Path, n.Size, n.Self, kids)
+				}
+			})
+		}
+	}
+}
+
+// TestSnapshotIsolated checks that a snapshot is a deep copy: mutating the
+// original afterwards must not show through.
+func TestSnapshotIsolated(t *testing.T) {
+	root := &Node{Name: "r", Path: "r", IsDir: true, Size: 30, Self: 10, Children: []*Node{
+		{Name: "a", Path: "r/a", Size: 20, Files: 1},
+	}}
+	snap := (&scanner{}).snapshot(root)
+
+	root.Size = 999
+	root.Children[0].Name = "changed"
+	root.Children = append(root.Children, &Node{Name: "b"})
+
+	if snap.Size != 30 || len(snap.Children) != 1 || snap.Children[0].Name != "a" {
+		t.Errorf("snapshot must be isolated from later mutations, got size %d, children %v",
+			snap.Size, snap.Children)
 	}
 }
 

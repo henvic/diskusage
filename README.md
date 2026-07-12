@@ -5,6 +5,10 @@ path, so you can decide what to clean up. Think `du` with sorting, bars, and an
 interactive explorer that opens by default — using only the Go standard library,
 no dependencies.
 
+> [!WARNING]
+> Most of the code here is AI generated. It has been verified to work
+> correctly, but it is not human handcrafted.
+
 ## Build
 
 ```sh

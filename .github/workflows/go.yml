@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    # The branches below must be a subset of the branches above
+    branches: [ "main" ]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: [1.26.x]
+    runs-on: ${{ matrix.os }}
+    name: Test
+    # The interactive explorer is Unix-only; Windows exercises the fallback
+    # build and the portable scanner, so treat its result as advisory.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    steps:
+
+    - name: Set up Go ${{ matrix.go }}
+      uses: actions/setup-go@v6
+      with:
+        go-version: ${{ matrix.go }}
+
+    - name: Check out code
+      uses: actions/checkout@v6
+
+    - name: Test
+      run: go test -race -covermode atomic -coverprofile=profile.cov ./...
+
+    - name: Code coverage
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+      uses: shogo82148/actions-goveralls@v1
+      with:
+        path-to-profile: profile.cov

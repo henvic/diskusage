@@ -75,7 +75,7 @@ func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}) ([]strin
 	}
 
 	restore := func() {
-		stty(tty, orig)
+		stty(tty, orig)                                 // #nosec G104 -- best-effort cleanup; nowhere to report a failure
 		fmt.Fprint(tty, "\x1b[?25h\x1b[?7h\x1b[?1049l") // show cursor, re-enable autowrap, leave alt screen
 	}
 	defer restore()
@@ -210,11 +210,12 @@ func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}) ([]strin
 		case <-tstp:
 			restore()
 			signal.Reset(syscall.SIGTSTP)
-			syscall.Kill(syscall.Getpid(), syscall.SIGTSTP) // actually stop, with the default action
+			// Actually stop, with the default action restored.
+			syscall.Kill(syscall.Getpid(), syscall.SIGTSTP) // #nosec G104 -- best effort; worst case we keep running
 			// Execution resumes here on SIGCONT (fg/bg). Redo the whole setup;
 			// the window may have been resized while suspended.
 			signal.Notify(tstp, syscall.SIGTSTP)
-			cbreak()
+			cbreak() // #nosec G104 -- it worked at startup; nowhere to report a failure now
 			enter()
 			repaint()
 		}
@@ -339,8 +340,8 @@ func dirSig(path string) uint64 {
 			mixByte(0)
 			continue
 		}
-		mixU64(uint64(info.Size()))
-		mixU64(uint64(info.ModTime().UnixNano()))
+		mixU64(uint64(info.Size()))               // #nosec G115 -- hash mixing; wraparound is fine
+		mixU64(uint64(info.ModTime().UnixNano())) // #nosec G115 -- hash mixing; wraparound is fine
 		if info.IsDir() {
 			mixByte('d')
 		} else {
@@ -668,7 +669,7 @@ func copyToClipboard(text string) error {
 			{"xsel", "--clipboard", "--input"},
 		} {
 			if _, err := exec.LookPath(c[0]); err == nil {
-				cmd = exec.Command(c[0], c[1:]...)
+				cmd = exec.Command(c[0], c[1:]...) // #nosec G204 -- fixed list above, no user input
 				break
 			}
 		}

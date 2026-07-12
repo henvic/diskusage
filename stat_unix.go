@@ -17,7 +17,7 @@ func diskUsage(info fs.FileInfo) (bytes int64, dev uint64, ok bool) {
 		return info.Size(), 0, false
 	}
 	// st_blocks is always in 512-byte units, independent of st_blksize.
-	return int64(st.Blocks) * 512, uint64(st.Dev), true
+	return int64(st.Blocks) * 512, uint64(st.Dev), true // #nosec G115 -- widening platform stat fields
 }
 
 // fileID returns the device/inode identity of info's file plus its link count,
@@ -28,5 +28,5 @@ func fileID(info fs.FileInfo) (dev, ino, nlink uint64, ok bool) {
 	if !k {
 		return 0, 0, 0, false
 	}
-	return uint64(st.Dev), uint64(st.Ino), uint64(st.Nlink), true
+	return uint64(st.Dev), uint64(st.Ino), uint64(st.Nlink), true // #nosec G115 -- widening platform stat fields
 }

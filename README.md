@@ -1,4 +1,5 @@
 # diskusage
+[![Go Reference](https://pkg.go.dev/badge/github.com/henvic/diskusage.svg)](https://pkg.go.dev/github.com/henvic/diskusage) [![Build Status](https://github.com/henvic/diskusage/actions/workflows/go.yml/badge.svg)](https://github.com/henvic/diskusage/actions/workflows/go.yml) [![Coverage Status](https://coveralls.io/repos/henvic/diskusage/badge.svg)](https://coveralls.io/r/henvic/diskusage) [![Go Report Card](https://goreportcard.com/badge/github.com/henvic/diskusage)](https://goreportcard.com/report/github.com/henvic/diskusage)
 
 A small, fast command-line tool that shows **where disk space goes** under a
 path, so you can decide what to clean up. Think `du` with sorting, bars, and an

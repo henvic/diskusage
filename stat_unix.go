@@ -19,3 +19,14 @@ func diskUsage(info fs.FileInfo) (bytes int64, dev uint64, ok bool) {
 	// st_blocks is always in 512-byte units, independent of st_blksize.
 	return int64(st.Blocks) * 512, uint64(st.Dev), true
 }
+
+// fileID returns the device/inode identity of info's file plus its link count,
+// used to count hardlinked files once and to break -L symlink cycles. ok is
+// false when the platform stat data is unavailable.
+func fileID(info fs.FileInfo) (dev, ino, nlink uint64, ok bool) {
+	st, k := info.Sys().(*syscall.Stat_t)
+	if !k {
+		return 0, 0, 0, false
+	}
+	return uint64(st.Dev), uint64(st.Ino), uint64(st.Nlink), true
+}

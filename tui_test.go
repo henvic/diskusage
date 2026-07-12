@@ -104,11 +104,7 @@ func TestExplorerEsc(t *testing.T) {
 // TestExplorerRescan verifies that 'r' picks up on-disk changes and propagates
 // the new totals up to the ancestors.
 func TestExplorerRescan(t *testing.T) {
-	dir, err := os.MkdirTemp(".", "dutest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	sub := filepath.Join(dir, "sub")
 	if err := os.Mkdir(sub, 0o755); err != nil {
@@ -145,11 +141,7 @@ func TestExplorerRescan(t *testing.T) {
 // TestExplorerStale checks the shallow stale indicator: a current-level change
 // is detected, an unchanged directory is not flagged, and a rescan clears it.
 func TestExplorerStale(t *testing.T) {
-	dir, err := os.MkdirTemp(".", "dutest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.txt"), 100)
 
 	sc := &scanner{apparent: true}
@@ -491,7 +483,7 @@ func TestUnmarkFromPanel(t *testing.T) {
 	}
 }
 
-// TestMarksPathFormatToggle checks 'p' flips the panel's path format.
+// TestMarksPathFormatToggle checks 'a' flips the panel's path format.
 func TestMarksPathFormatToggle(t *testing.T) {
 	root := &Node{Name: "root", IsDir: true, Children: []*Node{{Name: "a", Path: "root/a", Size: 1}}}
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
@@ -513,11 +505,7 @@ func TestMarksPathFormatToggle(t *testing.T) {
 // TestMarksSurviveRescan checks that path-keyed marks persist across 'r' and the
 // fresh node re-binds to the star.
 func TestMarksSurviveRescan(t *testing.T) {
-	dir, err := os.MkdirTemp(".", "dutest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.txt"), 1000)
 
 	sc := &scanner{apparent: true}
@@ -550,6 +538,99 @@ func TestMarksSurviveRescan(t *testing.T) {
 	}
 	if rowSpans(fresh, e.cur().Size, e.marked[fresh.Path])[0].text != "* " {
 		t.Fatal("the rescanned node should render the mark gutter")
+	}
+}
+
+// TestRescanKeepsCursorWithDotfilesHidden pins the index space of the cursor:
+// sel counts visible (dot-filtered) rows, so the cursor restored after a rescan
+// must be computed against the filtered listing, not raw Children.
+func TestRescanKeepsCursorWithDotfilesHidden(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".big"), 5000) // sorts first, but hidden
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "sub", "f"), 1000)
+	writeFile(t, filepath.Join(dir, "aaa"), 50)
+
+	sc := &scanner{apparent: true}
+	root, err := scan(dir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
+
+	e.handle([]byte(".")) // hide .big; visible: sub, aaa
+	if got := e.selected(); got == nil || got.Name != "sub" {
+		t.Fatalf("setup: cursor should sit on sub, got %v", got)
+	}
+	e.handle([]byte("l")) // into sub
+	e.handle([]byte("r")) // rescan restores the parent cursor onto sub
+	e.handle([]byte("h"))
+	if got := e.selected(); got == nil || got.Name != "sub" {
+		t.Fatalf("after rescan the parent cursor should still be on sub, got %v", got)
+	}
+}
+
+// TestRenderOffsetClamp checks that a stale scroll offset is pulled back so the
+// screen never shows blank rows while entries sit hidden above (e.g. after the
+// window grows).
+func TestRenderOffsetClamp(t *testing.T) {
+	kids := make([]*Node, 20)
+	for i := range kids {
+		kids[i] = &Node{Name: string(rune('a' + i)), Size: int64(100 - i)}
+	}
+	root := &Node{Name: "root", IsDir: true, Size: 2000, Children: kids}
+	e := &explorer{stack: []*Node{root}, sel: []int{16}, off: []int{15}, rows: 10, cols: 40}
+
+	e.render() // tty is nil; the frame goes nowhere but the state updates
+	// body = rows-3 = 7, so the largest useful offset is 20-7 = 13.
+	if got := e.off[0]; got != 13 {
+		t.Errorf("off after render = %d, want clamped to 13", got)
+	}
+}
+
+// TestFitSpans covers the width layout of styled rows: exact truncation with a
+// trailing ellipsis, right-padding, and the styling callback.
+func TestFitSpans(t *testing.T) {
+	spans := []styledSpan{{"abc", ""}, {"defg", ""}}
+	if got := fitSpans(spans, 5, spanPlain); got != "abcd…" {
+		t.Errorf("fitSpans w=5 = %q, want %q", got, "abcd…")
+	}
+	if got := fitSpans(spans, 4, spanPlain); got != "abc…" {
+		t.Errorf("fitSpans w=4 = %q, want %q", got, "abc…")
+	}
+	if got := fitSpans(spans, 10, spanPlain); got != "abcdefg   " {
+		t.Errorf("fitSpans w=10 = %q, want %q", got, "abcdefg   ")
+	}
+	if got := fitSpans([]styledSpan{{"x", "31"}}, 3, spanColor); got != "\x1b[31mx\x1b[0m  " {
+		t.Errorf("fitSpans colored = %q", got)
+	}
+}
+
+// TestSS3Sequences checks that ESC O <final> (SS3, sent by some terminal modes
+// for arrows/Home/End) moves the cursor instead of being read as a lone Esc.
+func TestSS3Sequences(t *testing.T) {
+	root := &Node{Name: "root", IsDir: true, Size: 60, Children: []*Node{
+		{Name: "a", Size: 30},
+		{Name: "b", Size: 20},
+		{Name: "c", Size: 10},
+	}}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+
+	e.handle([]byte{27, 'O', 'B'}) // SS3 down
+	if sel(e) != 1 {
+		t.Errorf("after SS3 down sel = %d, want 1", sel(e))
+	}
+	e.handle([]byte{27, 'O', 'F'}) // SS3 End
+	if sel(e) != 2 {
+		t.Errorf("after SS3 End sel = %d, want 2", sel(e))
+	}
+	e.handle([]byte{27, 'O', 'H'}) // SS3 Home
+	if sel(e) != 0 {
+		t.Errorf("after SS3 Home sel = %d, want 0", sel(e))
 	}
 }
 

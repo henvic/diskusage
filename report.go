@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,7 +46,14 @@ func humanize(b int64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %s", float64(b)/float64(div), units[exp])
+	v := float64(b) / float64(div)
+	// Just under a boundary, %.1f would round up to "1024.0"; promote the unit
+	// instead so it reads "1.0" of the next one.
+	if math.Round(v*10)/10 >= unit && exp < len(units)-1 {
+		v /= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %s", v, units[exp])
 }
 
 // comma groups an integer with thousands separators.
@@ -144,6 +152,9 @@ func parseSize(s string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
+	if f >= float64(math.MaxInt64)/float64(mult) {
+		return 0, fmt.Errorf("size %q is too large", s)
+	}
 	return int64(f * float64(mult)), nil
 }
 
@@ -159,13 +170,21 @@ func meter(size, total int64) string {
 		paint(bar(frac, 18), "36"))
 }
 
+// unreadableTag flags a directory whose contents could not be read, in both
+// the printed reports and the explorer.
+const unreadableTag = "  (unreadable)"
+
 // label renders a node's name, marking directories with a trailing slash and
-// color.
+// color, and flagging directories that could not be read.
 func label(n *Node) string {
+	s := n.Name
 	if n.IsDir {
-		return paint(n.Name+"/", "1;34")
+		s = paint(n.Name+"/", "1;34")
 	}
-	return n.Name
+	if n.Err != "" {
+		s += paint(unreadableTag, "31")
+	}
+	return s
 }
 
 // withProgress runs fn while showing a lightweight scan counter on stderr (only
@@ -176,7 +195,9 @@ func withProgress(s *scanner, fn func()) {
 		return
 	}
 	done := make(chan struct{})
+	idle := make(chan struct{})
 	go func() {
+		defer close(idle)
 		t := time.NewTicker(100 * time.Millisecond)
 		defer t.Stop()
 		for {
@@ -190,16 +211,25 @@ func withProgress(s *scanner, fn func()) {
 	}()
 	fn()
 	close(done)
+	<-idle // a tick in flight could otherwise print after the final clear
 	fmt.Fprint(os.Stderr, "\r\x1b[K")
 }
 
-// header prints the path line plus a one-line subtree total.
+// header prints the path line plus a one-line subtree total, noting how many
+// directories anywhere in the tree could not be read (their contents are
+// missing from the totals).
 func header(root *Node, path string) {
 	fmt.Println(paint(path, "1"))
 	line := fmt.Sprintf("%s in %s files, %s dirs",
 		humanize(root.Size), comma(root.Files), comma(root.Dirs))
-	if root.Err != nil {
-		line += "  " + paint("(some entries were unreadable)", "31")
+	unreadable := 0
+	walk(root, func(n *Node) {
+		if n.Err != "" {
+			unreadable++
+		}
+	})
+	if unreadable > 0 {
+		line += "  " + paint(fmt.Sprintf("(%d unreadable)", unreadable), "31")
 	}
 	fmt.Println(line)
 }

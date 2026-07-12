@@ -9,3 +9,9 @@ import "io/fs"
 func diskUsage(info fs.FileInfo) (bytes int64, dev uint64, ok bool) {
 	return info.Size(), 0, false
 }
+
+// fileID is unavailable without Unix stat data, so hardlink dedup and -L cycle
+// detection are no-ops.
+func fileID(info fs.FileInfo) (dev, ino, nlink uint64, ok bool) {
+	return 0, 0, 0, false
+}

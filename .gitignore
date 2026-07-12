@@ -1,5 +1,2 @@
 # Build artifact (binary matches the module name)
 /diskusage
-
-# Test scratch directories created under the worktree
-/dutest*

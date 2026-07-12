@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 )
 
@@ -94,9 +95,10 @@ func main() {
 
 func run() error {
 	var (
-		o      options
-		minStr string
-		excl   multiFlag
+		o           options
+		minStr      string
+		excl        multiFlag
+		showVersion bool
 	)
 
 	flag.BoolVar(&o.printOut, "p", false, "print output instead of the interactive explorer")
@@ -112,8 +114,18 @@ func run() error {
 	flag.IntVar(&o.limit, "limit", 0, "max entries to show (0 = no limit)")
 	flag.StringVar(&minStr, "min", "", "hide entries smaller than this (e.g. 10M, 1.5G)")
 	flag.Var(&excl, "exclude", "skip paths/names matching glob (repeatable)")
+	flag.BoolVar(&showVersion, "version", false, "print the version and exit")
 	flag.Usage = usage
 	flag.Parse()
+
+	if showVersion {
+		v := "unknown"
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
+			v = bi.Main.Version
+		}
+		fmt.Println("diskusage", v)
+		return nil
+	}
 
 	min, err := parseSize(minStr)
 	if err != nil {

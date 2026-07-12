@@ -29,6 +29,8 @@ type explorer struct {
 	wd     string   // the directory diskusage was launched from
 	status string   // transient message shown in the footer until the next key
 
+	rows, cols int // terminal size, measured at startup and again on SIGWINCH
+
 	stale   bool   // current directory changed on disk since it was scanned
 	baseSig uint64 // fingerprint of the current dir at scan/rescan time
 	baseDir string // path the baseline fingerprint belongs to
@@ -45,6 +47,7 @@ type explorer struct {
 	marksSel  int             // cursor row within the panel
 	marksOff  int             // panel scroll offset
 	marksRel  bool            // panel shows paths relative to CWD (default: absolute)
+	marksGone map[string]bool // marks no longer in the tree; rebuilt when the panel opens
 }
 
 // runTUI drives the interactive explorer on the controlling terminal. It always
@@ -61,34 +64,60 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 		return nil, err
 	}
 	// cbreak: unbuffered, no echo, but signals stay on so Ctrl-C still quits.
-	if err := stty(tty, "-echo", "-icanon", "min", "1", "time", "0"); err != nil {
+	cbreak := func() error { return stty(tty, "-echo", "-icanon", "min", "1", "time", "0") }
+	if err := cbreak(); err != nil {
 		return nil, err
 	}
 
 	restore := func() {
 		stty(tty, orig)
-		fmt.Fprint(tty, "\x1b[?25h\x1b[?1049l") // show cursor, leave alt screen
+		fmt.Fprint(tty, "\x1b[?25h\x1b[?7h\x1b[?1049l") // show cursor, re-enable autowrap, leave alt screen
 	}
 	defer restore()
 
-	// External signals (or a closed terminal) still restore the terminal.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// Quit signals are handled in the main loop below, so Ctrl-C behaves exactly
+	// like q: the deferred restore runs and the marks still print.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	// The loop can be busy for a while (a rescan of a big subtree), leaving the
+	// first signal queued. A second one means "really quit": bail out now.
+	force := make(chan os.Signal, 2)
+	signal.Notify(force, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		<-sig
+		<-force
+		<-force
 		restore()
 		os.Exit(130)
 	}()
 
-	// Window resizes trigger a full repaint.
+	// Ctrl-Z: the terminal must be restored before the process stops, and set up
+	// again when it resumes, or the user gets their shell back with no echo.
+	tstp := make(chan os.Signal, 1)
+	signal.Notify(tstp, syscall.SIGTSTP)
+
+	// Window resizes trigger a re-measure and a full repaint.
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
 
-	fmt.Fprint(tty, "\x1b[?1049h\x1b[?25l") // enter alt screen, hide cursor
+	// Alt screen, hidden cursor, and no autowrap: an overwide row (e.g. a name
+	// with double-width runes) then clips instead of wrapping and shifting the
+	// frame.
+	enter := func() { fmt.Fprint(tty, "\x1b[?1049h\x1b[?25l\x1b[?7l") }
+	enter()
 
 	sortChildren(root)
 	wd, _ := os.Getwd() // launch dir; the program never chdirs, so it holds until quit
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc, wd: wd}
+	e.measure()
+
+	// repaint re-measures and redraws from scratch, for the paths where the
+	// whole screen may be stale: a resize, or resuming from Ctrl-Z.
+	repaint := func() {
+		e.measure()
+		fmt.Fprint(e.tty, "\x1b[2J")
+		e.render()
+	}
 
 	// Read keys in a goroutine so the main loop can also wake on a timer to
 	// re-check whether the current directory changed on disk.
@@ -136,11 +165,26 @@ func runTUI(root *Node, path string, sc *scanner) ([]string, error) {
 				e.render()
 			}
 		case <-winch:
-			fmt.Fprint(e.tty, "\x1b[2J") // clear stale cells, then repaint at the new size
-			e.render()
+			repaint()
+		case <-quit:
+			return markPaths(e.marks, wd), nil
+		case <-tstp:
+			restore()
+			signal.Reset(syscall.SIGTSTP)
+			syscall.Kill(syscall.Getpid(), syscall.SIGTSTP) // actually stop, with the default action
+			// Execution resumes here on SIGCONT (fg/bg). Redo the whole setup;
+			// the window may have been resized while suspended.
+			signal.Notify(tstp, syscall.SIGTSTP)
+			cbreak()
+			enter()
+			repaint()
 		}
 	}
 }
+
+// measure refreshes the cached terminal size. Spawning stty is too costly to
+// repeat per frame, so this runs once at startup and on SIGWINCH.
+func (e *explorer) measure() { e.rows, e.cols = e.size() }
 
 // ensureBaseline records the on-disk fingerprint of the current directory the
 // first time it is shown (and after a rescan), so later polls can tell whether
@@ -235,9 +279,10 @@ func (e *explorer) handle(b []byte) bool {
 	for i := 0; i < len(b); i++ {
 		c := b[i]
 
-		// CSI escape sequence: ESC [ <final> , optionally with a trailing '~'.
+		// Escape sequence: ESC [ <final> (CSI) or ESC O <final> (SS3, sent for
+		// Home/End by some terminal modes), optionally with a trailing '~'.
 		if c == 27 {
-			if i+2 < len(b) && b[i+1] == '[' {
+			if i+2 < len(b) && (b[i+1] == '[' || b[i+1] == 'O') {
 				switch b[i+2] {
 				case 'A':
 					e.move(-1)
@@ -420,8 +465,19 @@ func markPaths(marks []string, wd string) []string {
 	return out
 }
 
-// openMarks shows the marks panel with its cursor clamped into range.
+// openMarks shows the marks panel with its cursor clamped into range. Marks
+// whose paths are no longer in the tree are noted here rather than per frame:
+// gone-ness only changes on rescan, which the panel itself cannot trigger.
 func (e *explorer) openMarks() {
+	e.marksGone = nil
+	for _, p := range e.marks {
+		if locate(e.stack[0], p) == nil {
+			if e.marksGone == nil {
+				e.marksGone = map[string]bool{}
+			}
+			e.marksGone[p] = true
+		}
+	}
 	e.marksView = true
 	e.marksSet(e.marksSel)
 }
@@ -487,8 +543,12 @@ func (e *explorer) openFolder() {
 	e.status = "opened " + path
 }
 
-// blink briefly flashes the selected row to confirm an action.
+// blink briefly flashes the selected row to confirm an action. Headless (no
+// tty) there is nothing to flash and no reason to sleep.
 func (e *explorer) blink() {
+	if e.tty == nil {
+		return
+	}
 	for i := 0; i < 2; i++ {
 		e.flash = true
 		e.render()
@@ -546,6 +606,11 @@ func (e *explorer) rescan() {
 	if !cur.IsDir {
 		return
 	}
+	if e.tty != nil {
+		// A large subtree takes a while and blocks the event loop; say so first.
+		e.status = "rescanning " + cur.Path + "…"
+		e.render()
+	}
 	fresh, err := scan(cur.Path, e.sc)
 	if err != nil {
 		e.status = "rescan failed: " + err.Error()
@@ -573,18 +638,31 @@ func (e *explorer) rescan() {
 			e.stack[i].Dirs += dDirs
 		}
 		// Re-sort the parent and keep its cursor on the refreshed directory.
+		// sel indexes the visible (dot-filtered) listing, not Children.
 		sortChildren(parent)
-		for i, c := range parent.Children {
+		found := false
+		for i, c := range e.visible(parent) {
 			if c == fresh {
 				e.sel[depth-1] = i
+				found = true
 				break
+			}
+		}
+		if !found {
+			// fresh is dot-hidden in the parent; the old index points into a
+			// listing the sort just reordered, so at least keep it in range.
+			if n := len(e.visible(parent)); e.sel[depth-1] >= n {
+				e.sel[depth-1] = n - 1
+			}
+			if e.sel[depth-1] < 0 {
+				e.sel[depth-1] = 0
 			}
 		}
 	}
 	e.stack[depth] = fresh
 
 	// Keep the selection within the (possibly smaller) listing.
-	if n := len(fresh.Children); e.sel[depth] >= n {
+	if n := len(e.visible(fresh)); e.sel[depth] >= n {
 		e.sel[depth] = n - 1
 	}
 	if e.sel[depth] < 0 {
@@ -647,7 +725,7 @@ func (e *explorer) ascend() {
 
 // render paints one frame.
 func (e *explorer) render() {
-	rows, cols := e.size()
+	rows, cols := e.rows, e.cols
 	if rows < 4 {
 		rows = 4
 	}
@@ -676,16 +754,7 @@ func (e *explorer) render() {
 	}
 	e.sel[len(e.sel)-1] = sel
 
-	off := e.off[len(e.off)-1]
-	if sel < off {
-		off = sel
-	}
-	if sel >= off+body {
-		off = sel - body + 1
-	}
-	if off < 0 {
-		off = 0
-	}
+	off := clampOff(e.off[len(e.off)-1], sel, len(kids), body)
 	e.off[len(e.off)-1] = off
 
 	var sb strings.Builder
@@ -713,6 +782,13 @@ func (e *explorer) render() {
 		idx := off + i
 		sb.WriteString("\x1b[K")
 		if idx >= len(kids) {
+			if len(kids) == 0 && i == 0 {
+				msg := " (empty)"
+				if e.hideDot && len(cur.Children) > 0 {
+					msg = " (only dotfiles — press . to show them)"
+				}
+				sb.WriteString(paint(msg, "2"))
+			}
 			sb.WriteString("\r\n")
 			continue
 		}
@@ -725,6 +801,9 @@ func (e *explorer) render() {
 			style, rowStyle := "\x1b[7m", spanPlain // reverse video for the cursor
 			if e.flash {
 				style = "\x1b[30;42m" // black on green: copy confirmation
+				if !useColor {
+					style = "" // still blink: drop the highlight for the flash frame
+				}
 			} else if useColor {
 				rowStyle = spanSelected
 			}
@@ -793,12 +872,12 @@ func (e *explorer) renderHelp(rows, cols int) {
 
 // handleMarks dispatches keys while the marks panel is open. Like the help
 // overlay it owns all input: j/k move, Enter/l/space jump to a mark's location,
-// m/d/x unmark, p toggles the path format, Esc/M close, q/Ctrl-C/Ctrl-D quit.
+// m/d/x unmark, a toggles the path format, Esc/M close, q/Ctrl-C/Ctrl-D quit.
 func (e *explorer) handleMarks(b []byte) bool {
 	for i := 0; i < len(b); i++ {
 		c := b[i]
-		if c == 27 { // CSI arrows, or a lone Esc that closes the panel
-			if i+2 < len(b) && b[i+1] == '[' {
+		if c == 27 { // CSI/SS3 arrows, or a lone Esc that closes the panel
+			if i+2 < len(b) && (b[i+1] == '[' || b[i+1] == 'O') {
 				switch b[i+2] {
 				case 'A':
 					e.marksMove(-1)
@@ -942,20 +1021,13 @@ func (e *explorer) jumpTo(target string) bool {
 	return true
 }
 
-// renderMarks draws the marks panel: the staged paths (relative to the launch
-// dir, or absolute with 'p'), with the cursor row highlighted.
+// renderMarks draws the marks panel: the staged paths (absolute by default,
+// relative to the launch dir with 'a'), with the cursor row highlighted. A mark
+// whose path is no longer in the scanned tree is dimmed and tagged as gone.
 func (e *explorer) renderMarks(rows, cols int) {
 	e.marksSet(e.marksSel) // keep the cursor in range after unmarking
 	body := rows - 2
-	if e.marksSel < e.marksOff {
-		e.marksOff = e.marksSel
-	}
-	if e.marksSel >= e.marksOff+body {
-		e.marksOff = e.marksSel - body + 1
-	}
-	if e.marksOff < 0 {
-		e.marksOff = 0
-	}
+	e.marksOff = clampOff(e.marksOff, e.marksSel, len(e.marks), body)
 
 	format := "absolute (a: relative)"
 	if e.marksRel {
@@ -974,9 +1046,16 @@ func (e *explorer) renderMarks(rows, cols int) {
 			sb.WriteString(fit("  (no marks yet — press m in the explorer)", cols))
 		case idx < len(e.marks):
 			line := " " + displayPath(e.marks[idx], e.wd, !e.marksRel)
-			if idx == e.marksSel {
+			gone := e.marksGone[e.marks[idx]]
+			if gone {
+				line += "  (gone)"
+			}
+			switch {
+			case idx == e.marksSel:
 				sb.WriteString("\x1b[7m" + fit(line, cols) + "\x1b[0m")
-			} else {
+			case gone:
+				sb.WriteString(paint(fit(line, cols), "2"))
+			default:
 				sb.WriteString(fit(line, cols))
 			}
 		}
@@ -997,6 +1076,9 @@ func (e *explorer) renderMarks(rows, cols int) {
 func headLabel(n *Node, stale bool) string {
 	s := fmt.Sprintf(" %s · %s files · %s dirs",
 		humanize(n.Size), comma(n.Files), comma(n.Dirs))
+	if n.Err != "" {
+		s += "   · unreadable"
+	}
 	if stale {
 		s += "   ● changed on disk — press r"
 	}
@@ -1032,7 +1114,7 @@ func rowSpans(n *Node, total int64, marked bool) []styledSpan {
 	if marked {
 		gutter, gutterCode = "* ", "33" // a yellow star flags a staged entry
 	}
-	return []styledSpan{
+	spans := []styledSpan{
 		{gutter, gutterCode},
 		{fmt.Sprintf("%10s ", humanize(n.Size)), ""},
 		{fmt.Sprintf("%4.0f%%", frac*100), "2"},
@@ -1041,6 +1123,10 @@ func rowSpans(n *Node, total int64, marked bool) []styledSpan {
 		{"  ", ""},
 		{name, nameCode},
 	}
+	if n.Err != "" {
+		spans = append(spans, styledSpan{unreadableTag, "31"})
+	}
+	return spans
 }
 
 // fitSpans renders spans to exactly w columns: it truncates with a trailing
@@ -1107,6 +1193,26 @@ func spanSelected(text, code string) string {
 	return text
 }
 
+// clampOff keeps a scroll offset within range: the selected row stays on
+// screen and no blank rows sit at the bottom while entries hide above (as a
+// stale offset would leave after the window grows or the listing shrinks).
+// Shared by the explorer listing and the marks panel.
+func clampOff(off, sel, n, body int) int {
+	if max := n - body; off > max {
+		off = max
+	}
+	if sel < off {
+		off = sel
+	}
+	if sel >= off+body {
+		off = sel - body + 1
+	}
+	if off < 0 {
+		off = 0
+	}
+	return off
+}
+
 // fit truncates s with an ellipsis or right-pads it with spaces to exactly w
 // runes.
 func fit(s string, w int) string {
@@ -1134,7 +1240,8 @@ func fitLeft(s string, w int) string {
 	return s + strings.Repeat(" ", w-len(r))
 }
 
-// size returns the terminal dimensions, falling back to 24x80.
+// size queries the terminal dimensions via stty, falling back to 24x80. It
+// costs a subprocess, so render reads the cached copy kept by measure.
 func (e *explorer) size() (rows, cols int) {
 	rows, cols = 24, 80
 	cmd := exec.Command("stty", "size")

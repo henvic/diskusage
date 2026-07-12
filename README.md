@@ -67,9 +67,10 @@ The window also redraws on resize.
 directory) to check later — marked rows get a `*` and the footer shows the
 count. `M` opens the marks panel, where you can review the list (shown as
 absolute paths; press `a` to switch to paths relative to where you launched),
-`m` to unmark, and Enter to jump straight to a mark's location. On quit, every
-marked path is printed to standard output as an absolute path, one per line.
-Marks last for the session only.
+`m` to unmark, and Enter to jump straight to a mark's location. A mark whose
+path is no longer in the scanned tree (deleted, then rescanned away) is dimmed
+and tagged as gone. On quit, every marked path is printed to standard output as
+an absolute path, one per line. Marks last for the session only.
 
 The tree is a snapshot taken when the scan ran, so edits you make on disk
 afterwards are not shown until you press `r`. `r` rescans the directory you are
@@ -91,8 +92,10 @@ guarantee. It needs no external dependencies.
 - `--depth N` — depth limit for `--tree` (0 = unlimited).
 - `--exclude '*.log'` — skip matching names/paths (repeatable).
 - `-x` — stay on a single filesystem.
-- `-L` — follow symbolic links (off by default; the link is counted, not its target).
+- `-L` — follow symbolic links (off by default; the link is counted, not its
+  target). Symlink cycles and repeated targets are scanned only once.
 - `--no-color` — plain output (also honors `NO_COLOR`).
+- `--version` — print the version and exit.
 
 ## Examples
 
@@ -109,6 +112,10 @@ diskusage --json . | jq '.children[0]'
 
 - The whole tree is held in memory (like `ncdu`); on huge filesystems use `-x`,
   `--exclude`, or scan a narrower path.
+- Hard-linked files are counted once, like `du`: whichever path the scan meets
+  first carries the size, and the other links are listed at 0 B.
+- Directories that cannot be read are flagged in the output — the sizes shown
+  undercount whatever was unreadable.
 - Disk-block accounting and `-x`/one-filesystem need Unix `stat`; on other
   platforms it falls back to apparent size. The interactive explorer is
   Unix-only; elsewhere (and when output is piped) diskusage prints the summary.

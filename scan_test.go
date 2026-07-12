@@ -9,11 +9,7 @@ import (
 // TestScan builds a small tree inside the worktree and checks the aggregated
 // counts and apparent sizes.
 func TestScan(t *testing.T) {
-	dir, err := os.MkdirTemp(".", "dutest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	writeFile(t, filepath.Join(dir, "a.txt"), 1000)
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
@@ -54,11 +50,7 @@ func TestScan(t *testing.T) {
 
 // TestExclude verifies that --exclude globs drop matching entries.
 func TestExclude(t *testing.T) {
-	dir, err := os.MkdirTemp(".", "dutest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	writeFile(t, filepath.Join(dir, "keep.txt"), 100)
 	writeFile(t, filepath.Join(dir, "skip.log"), 100)
@@ -94,6 +86,9 @@ func TestParseSize(t *testing.T) {
 	}
 	if _, err := parseSize("10X"); err == nil {
 		t.Error("parseSize(10X) should fail on a bad unit")
+	}
+	if _, err := parseSize("9999999999P"); err == nil {
+		t.Error("parseSize should reject a size that overflows int64")
 	}
 }
 

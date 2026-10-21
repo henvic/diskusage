@@ -31,7 +31,8 @@ diskusage [flags] [path]
 With no path it scans the current directory. Size is measured in **allocated
 disk blocks** (matching `du`); pass `--apparent` for logical file sizes. On a
 terminal it opens the interactive explorer by default; pass `--print` (or a
-format flag), or pipe the output, to print instead.
+format flag), or pipe the output, to print instead. Flags may come before or
+after the path; put `--` before a path that starts with `-`.
 
 ### Modes
 
@@ -77,6 +78,14 @@ path is no longer in the scanned tree (deleted, then rescanned away) is dimmed
 and tagged as gone. On quit, every marked path is printed to standard output as
 an absolute path, one per line. Marks last for the session only.
 
+Because the explorer draws on the terminal itself rather than on standard
+output, `-i` can open it even when output is redirected, and the marks then go
+wherever stdout points:
+
+```sh
+diskusage -i ~/Downloads > marks.txt   # explore, mark with m, quit
+```
+
 The explorer opens immediately, while the scan is still running: the listing
 fills in and sizes grow in place, with a `⟳ scanning` counter in the header.
 Sizes, percentages, and sort order are provisional until the counter
@@ -85,7 +94,9 @@ disappears; `r` (rescan) waits until then.
 Once the scan completes, the tree is a snapshot, so edits you make on disk
 afterwards are not shown until you press `r`. `r` rescans the directory you are
 currently viewing — a full refresh at the root, or just the current subtree
-deeper in — and updates the totals all the way up.
+deeper in — and updates the totals all the way up. The rescan runs in the
+background with a `⟳ rescanning` counter in the header; you can keep browsing
+the old numbers, and the fresh ones replace them when it finishes.
 
 The explorer also watches the directory on screen and shows a `● changed on
 disk` marker in the header when its contents change (a file added, removed, or
@@ -96,6 +107,7 @@ guarantee. It needs no external dependencies.
 ### Useful flags
 
 - `-p`, `--print` — print output instead of opening the interactive explorer.
+- `-i`, `--interactive` — open the explorer even when stdout is not a terminal.
 - `--apparent` — logical file size instead of disk blocks.
 - `--min 100M` — hide entries smaller than a size (`K`, `M`, `G`, `T`).
 - `--limit N` — cap the number of entries shown.
@@ -105,6 +117,9 @@ guarantee. It needs no external dependencies.
 - `-L` — follow symbolic links (off by default; the link is counted, not its
   target). Symlink cycles and repeated targets are scanned only once.
 - `--no-color` — plain output (also honors `NO_COLOR`).
+- `--progress-json` — write scan progress to stderr as newline-delimited JSON
+  (`{"scanned":N}`, ending with `"done":true`), even when stderr is not a
+  terminal. Meant for tools that drive diskusage, such as the macOS app.
 - `--version` — print the version and exit.
 
 ## Examples
@@ -118,6 +133,11 @@ diskusage --min 1G --tree /var     # only the big stuff in /var, as a tree
 diskusage --json . | jq '.children[0]'
 ```
 
+## macOS app
+
+[`gui/`](gui/) has a native SwiftUI version of the explorer, built on top of
+this CLI. See [gui/README.md](gui/README.md).
+
 ## Notes
 
 - The whole tree is held in memory (like `ncdu`); on huge filesystems use `-x`,
@@ -126,6 +146,13 @@ diskusage --json . | jq '.children[0]'
   first carries the size, and the other links are listed at 0 B.
 - Directories that cannot be read are flagged in the output — the sizes shown
   undercount whatever was unreadable.
+- On Linux, kernel filesystems mounted below the scanned path (`/proc`, `/sys`,
+  cgroup, debugfs, and similar) are skipped: they hold no data and report
+  meaningless sizes. Naming one directly, as in `diskusage /proc`, still scans it.
+- Control characters and invalid UTF-8 in file names are shown as escapes
+  (`\n`, `\x1b`) so they cannot garble the screen. JSON output, copied paths,
+  and the marks printed on quit keep the raw names.
 - Disk-block accounting and `-x`/one-filesystem need Unix `stat`; on other
   platforms it falls back to apparent size. The interactive explorer is
-  Unix-only; elsewhere (and when output is piped) diskusage prints the summary.
+  Unix-only; elsewhere (and when output is piped without `-i`) diskusage prints
+  the summary.

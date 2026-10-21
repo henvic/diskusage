@@ -33,6 +33,11 @@ type explorer struct {
 
 	scanning bool // the initial scan is still running; the stack holds snapshots
 
+	// job is the 'r' rescan running in the background, or nil. The explorer
+	// keeps browsing the old tree meanwhile and splices the result in when the
+	// walk finishes, so a big subtree no longer freezes the screen.
+	job *rescanJob
+
 	stale   bool   // current directory changed on disk since it was scanned
 	baseSig uint64 // fingerprint of the current dir at scan/rescan time
 	baseDir string // path the baseline fingerprint belongs to
@@ -51,6 +56,23 @@ type explorer struct {
 	marksRel  bool            // panel shows paths relative to CWD (default: absolute)
 	marksGone map[string]bool // marks no longer in the tree; rebuilt when the panel opens
 }
+
+// rescanJob is one background 'r' refresh: the node being replaced, the fresh
+// tree the scanner is filling, and the scanned counter at the start (the
+// counter is cumulative across scans, so progress is the difference).
+type rescanJob struct {
+	old   *Node
+	fresh *Node
+	done  <-chan struct{}
+	base  int64
+}
+
+// escDelay is how long a lone Esc byte waits for the rest of an escape
+// sequence. Terminals send an arrow key as one write (ESC [ B), but a slow or
+// lossy link can split it, and without the wait the ESC would back out a level
+// and the "[B" would be dropped. Only a bare Esc press pays this latency; any
+// other key that follows resolves it at once.
+const escDelay = 250 * time.Millisecond
 
 // runTUI drives the interactive explorer on the controlling terminal. It always
 // restores the terminal, even on Ctrl-C. root may still be filling in: until
@@ -168,20 +190,55 @@ func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}) ([]strin
 	defer ticker.Stop()
 	var nextSnap time.Time
 
+	// pending holds a trailing, possibly incomplete escape sequence until the
+	// rest of it arrives or escTimer fires (see escDelay).
+	var pending []byte
+	var escTimer <-chan time.Time
+
 	e.ensureBaseline()
 	e.render()
 	for {
+		var rescanDone <-chan struct{}
+		if e.job != nil {
+			rescanDone = e.job.done
+		}
 		select {
 		case k, ok := <-keys:
 			if !ok {
 				return markPaths(e.marks, wd), nil // terminal closed
 			}
-			if e.handle(k) {
+			var ready []byte
+			ready, pending = splitPendingEsc(append(pending, k...))
+			escTimer = nil
+			if len(pending) > 0 {
+				escTimer = time.After(escDelay)
+			}
+			if len(ready) == 0 {
+				continue
+			}
+			if e.handle(ready) {
 				return markPaths(e.marks, wd), nil
 			}
 			e.ensureBaseline()
 			e.render()
+		case <-escTimer:
+			// Nothing followed the Esc in time: it was a real Esc key press.
+			escTimer = nil
+			ready := pending
+			pending = nil
+			if e.handle(ready) {
+				return markPaths(e.marks, wd), nil
+			}
+			e.ensureBaseline()
+			e.render()
+		case <-rescanDone:
+			e.finishRescan()
+			e.ensureBaseline()
+			e.render()
 		case <-ticker.C:
+			if e.job != nil {
+				e.render() // advance the rescan counter
+			}
 			if e.scanning {
 				if time.Now().After(nextSnap) {
 					start := time.Now()
@@ -222,15 +279,47 @@ func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}) ([]strin
 	}
 }
 
+// splitPendingEsc splits input into the bytes ready to handle and a trailing
+// escape sequence that may still be incomplete: a bare ESC, ESC [ or ESC O, or
+// ESC [ followed only by parameter digits (Page Up/Down end in '~'). The
+// incomplete tail is returned as a fresh slice so the caller can keep it
+// across reads.
+func splitPendingEsc(b []byte) (ready, pending []byte) {
+	i := len(b) - 1
+	for i >= 0 && b[i] != 27 {
+		i--
+	}
+	if i < 0 {
+		return b, nil
+	}
+	tail := b[i:]
+	incomplete := len(tail) == 1 ||
+		(len(tail) == 2 && (tail[1] == '[' || tail[1] == 'O'))
+	if !incomplete && tail[1] == '[' {
+		incomplete = true
+		for _, c := range tail[2:] {
+			if (c < '0' || c > '9') && c != ';' {
+				incomplete = false
+				break
+			}
+		}
+	}
+	if !incomplete {
+		return b, nil
+	}
+	return b[:i], append([]byte(nil), tail...)
+}
+
 // measure refreshes the cached terminal size. Spawning stty is too costly to
 // repeat per frame, so this runs once at startup and on SIGWINCH.
 func (e *explorer) measure() { e.rows, e.cols = e.size() }
 
 // adopt swaps the tree the explorer is browsing — a fresh snapshot mid-scan,
-// or the live tree once the scan completes — reopening the same directory path
-// and keeping each level's cursor on the same entry. Entries only ever appear
-// during a scan, so the open path always still exists; a level is dropped only
-// if the new tree genuinely lacks it.
+// the live tree once the scan completes, or the tree with a finished rescan
+// spliced in — reopening the same directory path and keeping each level's
+// cursor on the same entry. A level is dropped only if the new tree lacks it
+// (a rescan can find a directory deleted), and a cursor whose entry vanished
+// keeps its old row, clamped to the listing.
 func (e *explorer) adopt(root *Node) {
 	// Remember where the cursor sits at every open level, by path.
 	want := make([]string, len(e.stack))
@@ -266,7 +355,12 @@ func (e *explorer) adopt(root *Node) {
 		off = append(off, e.off[d])
 	}
 	for d := range stack {
-		for i, c := range e.visible(stack[d]) {
+		kids := e.visible(stack[d])
+		sel[d] = min(e.sel[d], len(kids)-1)
+		if sel[d] < 0 {
+			sel[d] = 0
+		}
+		for i, c := range kids {
 			if c.Path == want[d] {
 				sel[d] = i
 				break
@@ -693,84 +787,78 @@ func openInFileManager(path string) error {
 	}
 }
 
-// rescan re-reads the directory currently on screen from disk and folds the
-// size changes back into its ancestors, so edits made since the initial scan
-// are reflected. At the root this is a full refresh; deeper it only re-walks
-// the current subtree.
+// rescan starts re-reading the directory currently on screen from disk, in the
+// background. At the root this is a full refresh; deeper it only re-walks the
+// current subtree. The explorer stays responsive meanwhile, showing the old
+// numbers with a progress counter, and finishRescan splices the result in.
 func (e *explorer) rescan() {
 	if e.scanning {
 		e.status = "still scanning — everything refreshes as it goes"
+		return
+	}
+	if e.job != nil {
+		e.status = "already rescanning " + e.job.old.Path
 		return
 	}
 	cur := e.cur()
 	if !cur.IsDir {
 		return
 	}
-	if e.tty != nil {
-		// A large subtree takes a while and blocks the event loop; say so first.
-		e.status = "rescanning " + cur.Path + "…"
-		e.render()
-	}
-	fresh, err := scan(cur.Path, e.sc)
+	base := e.sc.scanned.Load()
+	fresh, done, err := scanStart(cur.Path, e.sc)
 	if err != nil {
 		e.status = "rescan failed: " + err.Error()
 		return
 	}
+	e.job = &rescanJob{old: cur, fresh: fresh, done: done, base: base}
+	e.status = "rescanning " + cur.Path + "…"
+}
+
+// finishRescan splices a completed rescan into the tree: the fresh subtree
+// replaces the old node and every ancestor's totals shift by the difference.
+// The user may have navigated anywhere meanwhile, so the view is then rebuilt
+// by path with adopt, which keeps each level's cursor on the same entry. Only
+// one rescan runs at a time and nothing else mutates the tree after the
+// initial scan, so the old node is still where it was.
+func (e *explorer) finishRescan() {
+	job := e.job
+	e.job = nil
+	<-job.done // already closed when called from the loop; waits in tests
+	fresh, old := job.fresh, job.old
 	sortChildren(fresh)
 
-	depth := len(e.stack) - 1
-	if depth > 0 {
-		parent := e.stack[depth-1]
+	root := e.stack[0]
+	chain := locate(root, old.Path)
+	if chain == nil || chain[len(chain)-1] != old {
+		e.status = "rescan of " + old.Path + " discarded: the tree changed"
+		return
+	}
+	if len(chain) == 1 {
+		root = fresh
+	} else {
+		parent := chain[len(chain)-2]
 		for i, c := range parent.Children {
-			if c == cur {
+			if c == old {
 				parent.Children[i] = fresh
 				break
 			}
 		}
+		fresh.parent = parent
 		// Every ancestor's totals include this subtree, so shift them all by
 		// the same delta.
-		dSize := fresh.Size - cur.Size
-		dFiles := fresh.Files - cur.Files
-		dDirs := fresh.Dirs - cur.Dirs
-		for i := 0; i < depth; i++ {
-			e.stack[i].Size += dSize
-			e.stack[i].Files += dFiles
-			e.stack[i].Dirs += dDirs
-		}
-		// Re-sort the parent and keep its cursor on the refreshed directory.
-		// sel indexes the visible (dot-filtered) listing, not Children.
-		sortChildren(parent)
-		found := false
-		for i, c := range e.visible(parent) {
-			if c == fresh {
-				e.sel[depth-1] = i
-				found = true
-				break
-			}
-		}
-		if !found {
-			// fresh is dot-hidden in the parent; the old index points into a
-			// listing the sort just reordered, so at least keep it in range.
-			if n := len(e.visible(parent)); e.sel[depth-1] >= n {
-				e.sel[depth-1] = n - 1
-			}
-			if e.sel[depth-1] < 0 {
-				e.sel[depth-1] = 0
-			}
+		dSize := fresh.Size - old.Size
+		dFiles := fresh.Files - old.Files
+		dDirs := fresh.Dirs - old.Dirs
+		for _, a := range chain[:len(chain)-1] {
+			a.Size += dSize
+			a.Files += dFiles
+			a.Dirs += dDirs
 		}
 	}
-	e.stack[depth] = fresh
-
-	// Keep the selection within the (possibly smaller) listing.
-	if n := len(e.visible(fresh)); e.sel[depth] >= n {
-		e.sel[depth] = n - 1
-	}
-	if e.sel[depth] < 0 {
-		e.sel[depth] = 0
-	}
+	e.adopt(root)
 	e.baseDir = "" // force a fresh staleness baseline for the rescanned dir
 	e.stale = false
-	e.status = "rescanned " + cur.Path
+	e.status = "rescanned " + old.Path
 }
 
 // last selects the final entry in the current directory.
@@ -864,6 +952,10 @@ func (e *explorer) render() {
 	if e.scanning && e.sc != nil {
 		head += fmt.Sprintf("   ⟳ scanning… %s items", comma(e.sc.scanned.Load()))
 	}
+	if j := e.job; j != nil {
+		head += fmt.Sprintf("   ⟳ rescanning %s… %s items",
+			safe(filepath.Base(j.old.Path)), comma(e.sc.scanned.Load()-j.base))
+	}
 	if e.hideDot {
 		head += "   · dotfiles hidden"
 		if h := e.hiddenSize(); h > 0 {
@@ -875,7 +967,7 @@ func (e *explorer) render() {
 	// The path sits just above the listing it labels. It is bold rather than
 	// reverse video: reverse would cancel the terminal's own selection highlight,
 	// making the path impossible to see while you drag-select it to copy.
-	pathLine := fitLeft(" "+displayPath(cur.Path, e.wd, true), cols)
+	pathLine := fitLeft(" "+safe(displayPath(cur.Path, e.wd, true)), cols)
 	if useColor {
 		pathLine = "\x1b[1m" + pathLine + "\x1b[0m"
 	}
@@ -933,7 +1025,7 @@ func (e *explorer) render() {
 	}
 	foot := fmt.Sprintf(" ↑/↓ move  → open  ← back  m mark  M marks  ? help  q quit    %s", pos)
 	if e.status != "" {
-		foot = " " + e.status
+		foot = " " + safe(e.status) // statuses quote paths and names
 	}
 	sb.WriteString("\x1b[K\x1b[7m" + fit(foot, cols) + "\x1b[0m")
 
@@ -1151,7 +1243,7 @@ func (e *explorer) renderMarks(rows, cols int) {
 		case len(e.marks) == 0 && i == 0:
 			sb.WriteString(fit("  (no marks yet — press m in the explorer)", cols))
 		case idx < len(e.marks):
-			line := " " + displayPath(e.marks[idx], e.wd, !e.marksRel)
+			line := " " + safe(displayPath(e.marks[idx], e.wd, !e.marksRel))
 			gone := e.marksGone[e.marks[idx]]
 			if gone {
 				line += "  (gone)"
@@ -1170,7 +1262,7 @@ func (e *explorer) renderMarks(rows, cols int) {
 
 	foot := " ↑/↓ move  ↵ go  m unmark  a abs/rel  Esc back  q quit"
 	if e.status != "" {
-		foot = " " + e.status
+		foot = " " + safe(e.status)
 	}
 	sb.WriteString("\x1b[K\x1b[7m" + fit(foot, cols) + "\x1b[0m")
 	fmt.Fprint(e.tty, sb.String())
@@ -1210,7 +1302,7 @@ func rowSpans(n *Node, total int64, marked bool) []styledSpan {
 	if total > 0 {
 		frac = float64(n.Size) / float64(total)
 	}
-	name := n.Name
+	name := safe(n.Name)
 	nameCode := ""
 	if n.IsDir {
 		name += "/"
@@ -1304,8 +1396,8 @@ func spanSelected(text, code string) string {
 // stale offset would leave after the window grows or the listing shrinks).
 // Shared by the explorer listing and the marks panel.
 func clampOff(off, sel, n, body int) int {
-	if max := n - body; off > max {
-		off = max
+	if last := n - body; off > last {
+		off = last
 	}
 	if sel < off {
 		off = sel

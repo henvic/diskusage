@@ -101,7 +101,7 @@ func scanStart(root string, s *scanner) (*Node, <-chan struct{}, error) {
 		return n, done, nil
 	}
 	go func() {
-		s.fill(n, root)
+		s.fill(n, root, s.rootDev)
 		close(done)
 	}()
 	return n, done, nil
@@ -140,8 +140,9 @@ func (s *scanner) bytes(info fs.FileInfo) int64 {
 
 // fill reads path's entries into the already-published node n, recursing
 // (concurrently) into subdirectories. Directories are attached before they are
-// walked, so a snapshot taken mid-scan shows them growing in place.
-func (s *scanner) fill(n *Node, path string) {
+// walked, so a snapshot taken mid-scan shows them growing in place. dev is the
+// device path lives on, used to spot mount points.
+func (s *scanner) fill(n *Node, path string, dev uint64) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		s.treeMu.Lock()
@@ -173,10 +174,20 @@ func (s *scanner) fill(n *Node, path string) {
 		}
 
 		if ci.IsDir() {
-			if s.oneFS {
-				if _, dev, ok := diskUsage(ci); ok && dev != s.rootDev {
+			childDev := dev
+			if _, d, ok := diskUsage(ci); ok {
+				if s.oneFS && d != s.rootDev {
 					continue
 				}
+				// A new device means a mount point. Kernel filesystems such as
+				// /proc and /sys hold no data and report nonsense sizes, so they
+				// are skipped, like ncdu's --exclude-kernfs. Checking only at
+				// mount points keeps the extra statfs off the common path, and a
+				// scan rooted inside one (diskusage /proc) still works.
+				if d != dev && isKernFS(childPath) {
+					continue
+				}
+				childDev = d
 			}
 			child := &Node{Name: name, Path: childPath, IsDir: true}
 			if s.dupDir(ci, childPath) {
@@ -194,13 +205,13 @@ func (s *scanner) fill(n *Node, path string) {
 			select {
 			case s.sem <- struct{}{}:
 				wg.Add(1)
-				go func(c *Node, p string) {
+				go func(c *Node, p string, d uint64) {
 					defer wg.Done()
 					defer func() { <-s.sem }()
-					s.fill(c, p)
-				}(child, childPath)
+					s.fill(c, p, d)
+				}(child, childPath, childDev)
 			default:
-				s.fill(child, childPath)
+				s.fill(child, childPath, childDev)
 			}
 			continue
 		}

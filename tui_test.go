@@ -11,6 +11,17 @@ import (
 
 func sel(e *explorer) int { return e.sel[len(e.sel)-1] }
 
+// rescanNow presses r and waits for the background rescan to land, standing in
+// for the event loop's rescanDone case.
+func rescanNow(t *testing.T, e *explorer) {
+	t.Helper()
+	e.handle([]byte("r"))
+	if e.job == nil {
+		t.Fatalf("r did not start a rescan (status %q)", e.status)
+	}
+	e.finishRescan()
+}
+
 // TestExplorerNav drives the explorer's key handling without a terminal,
 // covering single keys, arrow escape sequences, and batched input.
 func TestExplorerNav(t *testing.T) {
@@ -127,7 +138,7 @@ func TestExplorerRescan(t *testing.T) {
 		t.Fatalf("expected to be in sub, got %q", e.cur().Name)
 	}
 	writeFile(t, filepath.Join(sub, "b.txt"), 2000)
-	e.handle([]byte("r"))
+	rescanNow(t, e)
 
 	if got := e.cur().Files; got != 2 {
 		t.Fatalf("sub files after rescan = %d, want 2", got)
@@ -167,7 +178,7 @@ func TestExplorerStale(t *testing.T) {
 	}
 
 	// Rescanning clears the indicator.
-	e.handle([]byte("r"))
+	rescanNow(t, e)
 	e.ensureBaseline()
 	if e.stale {
 		t.Fatal("rescan should clear the stale flag")
@@ -523,7 +534,7 @@ func TestMarksSurviveRescan(t *testing.T) {
 	}
 
 	writeFile(t, filepath.Join(dir, "b.txt"), 2000)
-	e.handle([]byte("r"))
+	rescanNow(t, e)
 	if !e.marked[marked.Path] {
 		t.Fatal("mark should survive a rescan (keyed by path)")
 	}
@@ -566,7 +577,7 @@ func TestRescanKeepsCursorWithDotfilesHidden(t *testing.T) {
 		t.Fatalf("setup: cursor should sit on sub, got %v", got)
 	}
 	e.handle([]byte("l")) // into sub
-	e.handle([]byte("r")) // rescan restores the parent cursor onto sub
+	rescanNow(t, e)       // rescan restores the parent cursor onto sub
 	e.handle([]byte("h"))
 	if got := e.selected(); got == nil || got.Name != "sub" {
 		t.Fatalf("after rescan the parent cursor should still be on sub, got %v", got)
@@ -735,5 +746,119 @@ func TestMarkPaths(t *testing.T) {
 	}
 	if markPaths(nil, "/home/u") != nil {
 		t.Error("empty marks should yield nil")
+	}
+}
+
+// TestSplitPendingEsc checks which trailing bytes are held back as a possibly
+// incomplete escape sequence.
+func TestSplitPendingEsc(t *testing.T) {
+	cases := []struct {
+		in, ready, pending string
+	}{
+		{"jk", "jk", ""},
+		{"\x1b", "", "\x1b"},             // bare Esc: wait for more
+		{"j\x1b", "j", "\x1b"},           // key then Esc
+		{"\x1b[", "", "\x1b["},           // CSI introducer only
+		{"\x1bO", "", "\x1bO"},           // SS3 introducer only
+		{"\x1b[5", "", "\x1b[5"},         // Page Up without its '~'
+		{"\x1b[B", "\x1b[B", ""},         // complete arrow
+		{"\x1b[5~", "\x1b[5~", ""},       // complete Page Up
+		{"\x1b[Bj", "\x1b[Bj", ""},       // arrow then key
+		{"\x1bj", "\x1bj", ""},           // Esc then key: resolved at once
+		{"\x1b[A\x1b", "\x1b[A", "\x1b"}, // arrow then a fresh Esc
+	}
+	for _, c := range cases {
+		ready, pending := splitPendingEsc([]byte(c.in))
+		if string(ready) != c.ready || string(pending) != c.pending {
+			t.Errorf("splitPendingEsc(%q) = %q, %q; want %q, %q", c.in, ready, pending, c.ready, c.pending)
+		}
+	}
+}
+
+// TestSplitEscapeSequenceMoves replays an arrow key split across two reads, as
+// the event loop does, and checks it moves the cursor instead of backing out.
+func TestSplitEscapeSequenceMoves(t *testing.T) {
+	sub := &Node{Name: "sub", Path: "r/sub", IsDir: true, Size: 30, Children: []*Node{
+		{Name: "x", Path: "r/sub/x", Size: 20},
+		{Name: "y", Path: "r/sub/y", Size: 10},
+	}}
+	root := &Node{Name: "r", Path: "r", IsDir: true, Size: 30, Children: []*Node{sub}}
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+	e.handle([]byte("l"))
+
+	var pending []byte
+	for _, chunk := range []string{"\x1b", "[B"} {
+		var ready []byte
+		ready, pending = splitPendingEsc(append(pending, chunk...))
+		if len(ready) > 0 {
+			e.handle(ready)
+		}
+	}
+	if len(e.stack) != 2 || sel(e) != 1 || len(pending) != 0 {
+		t.Fatalf("split down-arrow: depth %d sel %d pending %q, want depth 2 sel 1", len(e.stack), sel(e), pending)
+	}
+}
+
+// TestRescanRunsInBackground checks that r returns at once, the explorer keeps
+// navigating while the rescan runs, a second r is refused, and the result is
+// spliced in even after the user moved away from the rescanned directory.
+func TestRescanRunsInBackground(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sub, "a.txt"), 1000)
+	writeFile(t, filepath.Join(dir, "top.txt"), 10)
+
+	sc := &scanner{apparent: true}
+	root, err := scan(dir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sortChildren(root)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
+	for i, c := range e.children() {
+		if c.Name == "sub" {
+			e.set(i)
+		}
+	}
+	e.handle([]byte("l"))
+	writeFile(t, filepath.Join(sub, "b.txt"), 5000)
+	rootFiles := root.Files
+
+	e.handle([]byte("r"))
+	if e.job == nil {
+		t.Fatal("r should start a background rescan")
+	}
+	e.handle([]byte("r"))
+	if !strings.Contains(e.status, "already rescanning") {
+		t.Errorf("a second r should be refused, status = %q", e.status)
+	}
+	e.handle([]byte("h")) // navigate away while it runs
+	if len(e.stack) != 1 {
+		t.Fatalf("navigation during a rescan failed, depth %d", len(e.stack))
+	}
+
+	e.finishRescan()
+	if got := e.stack[0].Files; got != rootFiles+1 {
+		t.Errorf("root files after rescan = %d, want %d", got, rootFiles+1)
+	}
+	if got := e.selected(); got == nil || got.Name != "sub" {
+		t.Errorf("cursor should stay on sub, got %v", got)
+	}
+	e.handle([]byte("l"))
+	if e.cur().Name != "sub" || e.cur().Files != 2 {
+		t.Errorf("reopened sub should be the rescanned node with 2 files, got %q with %d", e.cur().Name, e.cur().Files)
+	}
+}
+
+// TestRowSpansEscapeName checks the explorer never draws a raw control byte
+// from a file name.
+func TestRowSpansEscapeName(t *testing.T) {
+	for _, sp := range rowSpans(&Node{Name: "a\x1b[2Jb\nc"}, 1, false) {
+		if strings.ContainsAny(sp.text, "\x1b\n") {
+			t.Errorf("row span leaked a control byte: %q", sp.text)
+		}
 	}
 }

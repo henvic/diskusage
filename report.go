@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // useColor is set once in main from the terminal/NO_COLOR/--no-color state and
@@ -32,6 +34,48 @@ func isTTY(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// safe makes a file name or path harmless to print on a terminal. Unix names
+// may hold any byte but '/' and NUL, so a name carrying an escape sequence
+// could recolor or rewrite the screen, and one carrying a newline would split
+// its row. Control characters become visible escapes (\n, \t, \x1b, \u0085)
+// and bytes that are not valid UTF-8 become \xNN; everything else, including
+// non-ASCII text, passes through unchanged. It is for display only: JSON, the
+// clipboard, and the marks printed on quit keep the raw path.
+func safe(s string) string {
+	clean := true
+	for _, r := range s {
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size <= 1:
+			fmt.Fprintf(&b, "\\x%02x", s[i])
+		case r == '\n':
+			b.WriteString("\\n")
+		case r == '\t':
+			b.WriteString("\\t")
+		case r == '\r':
+			b.WriteString("\\r")
+		case unicode.IsControl(r) && r < 0x80:
+			fmt.Fprintf(&b, "\\x%02x", r)
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, "\\u%04x", r)
+		default:
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
 }
 
 // humanize renders a byte count using IEC units (KiB, MiB, ...).
@@ -177,9 +221,9 @@ const unreadableTag = "  (unreadable)"
 // label renders a node's name, marking directories with a trailing slash and
 // color, and flagging directories that could not be read.
 func label(n *Node) string {
-	s := n.Name
+	s := safe(n.Name)
 	if n.IsDir {
-		s = paint(n.Name+"/", "1;34")
+		s = paint(s+"/", "1;34")
 	}
 	if n.Err != "" {
 		s += paint(unreadableTag, "31")
@@ -215,11 +259,38 @@ func withProgress(s *scanner, fn func()) {
 	fmt.Fprint(os.Stderr, "\r\x1b[K")
 }
 
+// withJSONProgress runs fn while emitting newline-delimited JSON progress
+// events to stderr ({"scanned":N}), finishing with {"scanned":N,"done":true}.
+// Unlike withProgress it writes regardless of whether stderr is a terminal,
+// so a non-interactive caller (e.g. a GUI driving diskusage as a subprocess)
+// can show scan progress without a tty of its own.
+func withJSONProgress(s *scanner, fn func()) {
+	done := make(chan struct{})
+	idle := make(chan struct{})
+	go func() {
+		defer close(idle)
+		t := time.NewTicker(100 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				fmt.Fprintf(os.Stderr, `{"scanned":%d}`+"\n", s.scanned.Load())
+			}
+		}
+	}()
+	fn()
+	close(done)
+	<-idle // a tick in flight could otherwise print after the final line
+	fmt.Fprintf(os.Stderr, `{"scanned":%d,"done":true}`+"\n", s.scanned.Load())
+}
+
 // header prints the path line plus a one-line subtree total, noting how many
 // directories anywhere in the tree could not be read (their contents are
 // missing from the totals).
 func header(root *Node, path string) {
-	fmt.Println(paint(path, "1"))
+	fmt.Println(paint(safe(path), "1"))
 	line := fmt.Sprintf("%s in %s files, %s dirs",
 		humanize(root.Size), comma(root.Files), comma(root.Dirs))
 	unreadable := 0
@@ -267,7 +338,7 @@ func printTree(root *Node, path string, o options) {
 	sortChildren(root)
 	header(root, path)
 	total := root.Size
-	fmt.Printf("%s  %s\n", meter(total, total), paint(filepath.Base(path)+"/", "1;34"))
+	fmt.Printf("%s  %s\n", meter(total, total), paint(safe(filepath.Base(path))+"/", "1;34"))
 	treeKids(root, total, "", o, 1)
 }
 
@@ -338,7 +409,7 @@ func printFiles(root *Node, path string, o options) {
 		if err != nil {
 			rel = f.Path
 		}
-		fmt.Printf("%s  %s\n", meter(f.Size, total), rel)
+		fmt.Printf("%s  %s\n", meter(f.Size, total), safe(rel))
 		shown++
 		if shown >= limit {
 			break

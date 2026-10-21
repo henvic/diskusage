@@ -161,12 +161,18 @@ func TestRescanKeepsHardlinkDedup(t *testing.T) {
 	before := root.Size
 
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
-	e.handle([]byte("j")) // a.bin (1000) sorts first; sub second
+	// Select sub by name: where it sorts depends on the filesystem, since a
+	// directory's own size is 4 KiB on ext4 but a few hundred bytes on APFS.
+	for i, c := range e.children() {
+		if c.Name == "sub" {
+			e.set(i)
+		}
+	}
 	e.handle([]byte("l"))
 	if e.cur().Name != "sub" {
 		t.Fatalf("setup: expected to be in sub, got %q", e.cur().Name)
 	}
-	e.handle([]byte("r"))
+	rescanNow(t, e)
 	if got := e.stack[0].Size; got != before {
 		t.Errorf("root size after subtree rescan = %d, want %d (hardlink must stay counted once)", got, before)
 	}

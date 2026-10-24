@@ -509,6 +509,8 @@ func (e *explorer) handle(b []byte) bool {
 			e.copyPath(true)
 		case 'C': // copy the selected path relative to the working directory
 			e.copyPath(false)
+		case 'o': // open the selected entry with its default app
+			e.openEntry()
 		case 'f': // open the current folder in the file manager
 			e.openFolder()
 		case '?': // show the key reference
@@ -725,8 +727,26 @@ func displayPath(raw, wd string, absolute bool) string {
 
 // openFolder reveals the directory currently on screen in the OS file manager.
 func (e *explorer) openFolder() {
-	path := e.cur().Path
-	if err := openInFileManager(path); err != nil {
+	e.open(e.cur().Path)
+}
+
+// openEntry opens the selected entry with its default app; a directory opens
+// in the file manager.
+func (e *explorer) openEntry() {
+	target := e.selected()
+	if target == nil {
+		e.status = "nothing to open"
+		return
+	}
+	e.open(target.Path)
+}
+
+// open hands raw to the desktop's default handler and reports the outcome on
+// the status line. The path is made absolute first so a name starting with "-"
+// cannot be taken for an option of the opener.
+func (e *explorer) open(raw string) {
+	path := displayPath(raw, e.wd, true)
+	if err := openPath(path); err != nil {
 		e.status = "open failed: " + err.Error()
 		return
 	}
@@ -756,7 +776,7 @@ func copyToClipboard(text string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		cmd = exec.Command("pbcopy")
-	case "linux":
+	default: // Linux, the BSDs, and other Unixes running Wayland or X11
 		for _, c := range [][]string{
 			{"wl-copy"},
 			{"xclip", "-selection", "clipboard"},
@@ -775,15 +795,14 @@ func copyToClipboard(text string) error {
 	return cmd.Run()
 }
 
-// openInFileManager opens a path in the desktop file manager (Finder on macOS).
-func openInFileManager(path string) error {
+// openPath opens a path with the desktop's default handler: a file in its
+// associated app, a directory in the file manager (Finder on macOS).
+func openPath(path string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", path).Run()
-	case "linux":
+	default: // Linux, the BSDs, and other Unixes with a freedesktop desktop
 		return exec.Command("xdg-open", path).Run()
-	default:
-		return errors.New("unsupported platform")
 	}
 }
 
@@ -1041,7 +1060,8 @@ func (e *explorer) renderHelp(rows, cols int) {
 		"  g/G               first / last",
 		"  c                 copy absolute path",
 		"  C                 copy relative path",
-		"  f                 open folder in Finder",
+		"  o                 open in default app",
+		"  f                 open folder in file manager",
 		"  r                 rescan from disk",
 		"  .                 show/hide dotfiles",
 		"  m                 mark / unmark entry",

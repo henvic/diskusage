@@ -277,10 +277,10 @@ Flags:
 	fmt.Fprint(os.Stderr, `
 Interactive keys:
   ↑/↓ or j/k  move           →/Enter or l  open dir   ←/h/Esc  go up (back)
-  c / C  copy absolute / relative path     f  open folder in Finder
+  c / C  copy absolute / relative path     f  open folder in file manager
   r  rescan from disk        g/G  first/last           ?  show keys
   .  show/hide dotfiles      m  mark / unmark           M  marks panel
-  q or Ctrl-C  quit
+  o  open in default app     q or Ctrl-C  quit
 A ● in the header marks the current directory as changed on disk since scanned.
 Entries you mark with m are printed as absolute paths when you quit.
 Kernel filesystems mounted below the path (/proc, /sys, ...) are skipped.

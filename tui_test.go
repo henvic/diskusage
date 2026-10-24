@@ -389,6 +389,17 @@ func TestExplorerMarkToggle(t *testing.T) {
 	}
 }
 
+// TestOpenEntryEmpty checks 'o' in an empty directory reports that there is
+// nothing to open instead of launching anything.
+func TestOpenEntryEmpty(t *testing.T) {
+	empty := &Node{Name: "empty", IsDir: true}
+	e := &explorer{stack: []*Node{empty}, sel: []int{0}, off: []int{0}}
+	e.handle([]byte("o"))
+	if e.status != "nothing to open" {
+		t.Fatalf("status = %q, want 'nothing to open'", e.status)
+	}
+}
+
 // TestMarkIndicator checks the leading gutter span rowSpans adds for marked rows.
 func TestMarkIndicator(t *testing.T) {
 	n := &Node{Name: "x", Size: 10}

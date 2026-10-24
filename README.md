@@ -50,10 +50,10 @@ after the path; put `--` before a path that starts with `-`.
 ↑/↓ or j/k   move                →/Enter or l   open directory
 ←/h/Esc      go up (back)         g/G            first / last
 c            copy absolute path   C              copy relative path
-f            open in Finder       r              rescan from disk
-.            show/hide dotfiles   m              mark / unmark entry
-M            marks panel          ?              show keys
-q or Ctrl-C  quit
+o            open in default app  f              open folder in file manager
+r            rescan from disk     .              show/hide dotfiles
+m            mark / unmark entry  M              marks panel
+?            show keys            q or Ctrl-C    quit
 ```
 
 Esc backs out one level rather than quitting; at the root it does nothing, and
@@ -61,9 +61,11 @@ Esc backs out one level rather than quitting; at the root it does nothing, and
 ("hidden") entries are listed — a view filter only, so sizes and totals never
 change. `c` flashes the selected row
 and copies its absolute path to the clipboard; `C` copies the path relative to
-the current working directory. `f` opens the directory you are viewing in the
-file manager. On macOS copy/open use `pbcopy` and `open` (Finder); on Linux
-they fall back to `wl-copy`/`xclip`/`xsel` and `xdg-open`. (Cmd+C can't be
+the current working directory. `o` opens the selected entry in its default app
+(a directory opens in the file manager), and `f` opens the directory you are
+viewing in the file manager. On macOS copy/open use `pbcopy` and `open`; on Linux
+and other Unix systems (the BSDs, …) they fall back to `wl-copy`/`xclip`/`xsel`
+and `xdg-open`. (Cmd+C can't be
 bound: the terminal handles it itself to copy selected text, so it never
 reaches the program.)
 

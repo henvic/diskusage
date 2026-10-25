@@ -28,8 +28,13 @@ go run . [flags] [path]
 diskusage [flags] [path]
 ```
 
-With no path it scans the current directory. Size is measured in **allocated
-disk blocks** (matching `du`); pass `--apparent` for logical file sizes. On a
+With no path it scans the current directory. Every entry is measured both ways:
+**space used on disk** (allocated blocks, matching `du`) and **apparent size**
+(the logical length, matching `ls -l`). Listings sort by space on disk; pass
+`--apparent` to sort by apparent size, or press `a` in the explorer to switch.
+Totals show both numbers whenever they differ, which they do for sparse files
+(VM and Docker images), compressed files, cloud-only placeholders, and
+directories full of small files. On a
 terminal it opens the interactive explorer by default; pass `--print` (or a
 format flag), or pipe the output, to print instead. Flags may come before or
 after the path; put `--` before a path that starts with `-`.
@@ -53,7 +58,8 @@ c            copy absolute path   C              copy relative path
 o            open in default app  f              open folder in file manager
 r            rescan from disk     .              show/hide dotfiles
 m            mark / unmark entry  M              marks panel
-?            show keys            q or Ctrl-C    quit
+a            on disk / apparent   ?              show keys
+q or Ctrl-C  quit
 ```
 
 Esc backs out one level rather than quitting; at the root it does nothing, and
@@ -110,7 +116,8 @@ guarantee. It needs no external dependencies.
 
 - `-p`, `--print` — print output instead of opening the interactive explorer.
 - `-i`, `--interactive` — open the explorer even when stdout is not a terminal.
-- `--apparent` — logical file size instead of disk blocks.
+- `--apparent` — sort and size by apparent (logical) size instead of space on
+  disk.
 - `--min 100M` — hide entries smaller than a size (`K`, `M`, `G`, `T`).
 - `--limit N` — cap the number of entries shown.
 - `--depth N` — depth limit for `--tree` (0 = unlimited).
@@ -155,6 +162,6 @@ this CLI. See [gui/README.md](gui/README.md).
   (`\n`, `\x1b`) so they cannot garble the screen. JSON output, copied paths,
   and the marks printed on quit keep the raw names.
 - Disk-block accounting and `-x`/one-filesystem need Unix `stat`; on other
-  platforms it falls back to apparent size. The interactive explorer is
+  platforms the on-disk size is the apparent size. The interactive explorer is
   Unix-only; elsewhere (and when output is piped without `-i`) diskusage prints
   the summary.

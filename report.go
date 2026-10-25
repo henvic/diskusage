@@ -286,13 +286,27 @@ func withJSONProgress(s *scanner, fn func()) {
 	fmt.Fprintf(os.Stderr, `{"scanned":%d,"done":true}`+"\n", s.scanned.Load())
 }
 
+// totals renders a node's size under the chosen measure, followed by the other
+// measure when it reads differently: "8.1 GiB on disk · 64.3 GiB apparent".
+// Shared by the printed header and the explorer's totals line.
+func totals(n *Node, apparent bool) string {
+	disk, app := humanize(n.Size), humanize(n.Apparent)
+	if disk == app {
+		return disk
+	}
+	if apparent {
+		return app + " apparent · " + disk + " on disk"
+	}
+	return disk + " on disk · " + app + " apparent"
+}
+
 // header prints the path line plus a one-line subtree total, noting how many
 // directories anywhere in the tree could not be read (their contents are
 // missing from the totals).
-func header(root *Node, path string) {
+func header(root *Node, path string, apparent bool) {
 	fmt.Println(paint(safe(path), "1"))
 	line := fmt.Sprintf("%s in %s files, %s dirs",
-		humanize(root.Size), comma(root.Files), comma(root.Dirs))
+		totals(root, apparent), comma(root.Files), comma(root.Dirs))
 	unreadable := 0
 	walk(root, func(n *Node) {
 		if n.Err != "" {
@@ -308,17 +322,17 @@ func header(root *Node, path string) {
 // printSummary lists the largest items directly under the path. This is the
 // default mode and the quickest answer to "where did my space go?".
 func printSummary(root *Node, path string, o options) {
-	sortChildren(root)
-	header(root, path)
+	sortChildren(root, o.apparent)
+	header(root, path, o.apparent)
 	fmt.Println()
 
-	total := root.Size
+	total := root.bytes(o.apparent)
 	shown := 0
 	for _, c := range root.Children {
-		if o.min > 0 && c.Size < o.min {
+		if o.min > 0 && c.bytes(o.apparent) < o.min {
 			break
 		}
-		fmt.Printf("%s  %s\n", meter(c.Size, total), label(c))
+		fmt.Printf("%s  %s\n", meter(c.bytes(o.apparent), total), label(c))
 		shown++
 		if o.limit > 0 && shown >= o.limit {
 			break
@@ -335,9 +349,9 @@ func printSummary(root *Node, path string, o options) {
 // printTree prints a size-sorted tree with box-drawing connectors, pruned by
 // --depth, --limit (per directory) and --min.
 func printTree(root *Node, path string, o options) {
-	sortChildren(root)
-	header(root, path)
-	total := root.Size
+	sortChildren(root, o.apparent)
+	header(root, path, o.apparent)
+	total := root.bytes(o.apparent)
 	fmt.Printf("%s  %s\n", meter(total, total), paint(safe(filepath.Base(path))+"/", "1;34"))
 	treeKids(root, total, "", o, 1)
 }
@@ -353,7 +367,7 @@ func treeKids(n *Node, total int64, prefix string, o options, depth int) {
 		if last {
 			branch, next = "└─ ", prefix+"   "
 		}
-		fmt.Printf("%s  %s%s\n", meter(c.Size, total), prefix+branch, label(c))
+		fmt.Printf("%s  %s%s\n", meter(c.bytes(o.apparent), total), prefix+branch, label(c))
 		if c.IsDir {
 			treeKids(c, total, next, o, depth+1)
 		}
@@ -363,10 +377,10 @@ func treeKids(n *Node, total int64, prefix string, o options, depth int) {
 // shownKids returns a node's children in display order after applying the --min
 // and --limit cutoffs.
 func shownKids(n *Node, o options) []*Node {
-	sortChildren(n)
+	sortChildren(n, o.apparent)
 	var out []*Node
 	for _, c := range n.Children {
-		if o.min > 0 && c.Size < o.min {
+		if o.min > 0 && c.bytes(o.apparent) < o.min {
 			break
 		}
 		out = append(out, c)
@@ -386,30 +400,30 @@ func printFiles(root *Node, path string, o options) {
 		}
 	})
 	sort.Slice(files, func(i, j int) bool {
-		if files[i].Size != files[j].Size {
-			return files[i].Size > files[j].Size
+		if a, b := files[i].bytes(o.apparent), files[j].bytes(o.apparent); a != b {
+			return a > b
 		}
 		return files[i].Path < files[j].Path
 	})
 
-	header(root, path)
+	header(root, path, o.apparent)
 	fmt.Println()
 
 	limit := o.limit
 	if limit <= 0 {
 		limit = 30
 	}
-	total := root.Size
+	total := root.bytes(o.apparent)
 	shown := 0
 	for _, f := range files {
-		if o.min > 0 && f.Size < o.min {
+		if o.min > 0 && f.bytes(o.apparent) < o.min {
 			break
 		}
 		rel, err := filepath.Rel(path, f.Path)
 		if err != nil {
 			rel = f.Path
 		}
-		fmt.Printf("%s  %s\n", meter(f.Size, total), safe(rel))
+		fmt.Printf("%s  %s\n", meter(f.bytes(o.apparent), total), safe(rel))
 		shown++
 		if shown >= limit {
 			break

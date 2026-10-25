@@ -147,3 +147,19 @@ func TestLabelEscapesName(t *testing.T) {
 		t.Errorf("label leaked a control byte: %q", got)
 	}
 }
+
+// TestTotals checks the two-size summary: one number when both sizes read the
+// same, otherwise both with the active measure first.
+func TestTotals(t *testing.T) {
+	same := &Node{Size: 2048, Apparent: 2000} // both "2.0 KiB"
+	if got := totals(same, false); got != "2.0 KiB" {
+		t.Errorf("equal sizes should print once, got %q", got)
+	}
+	sparse := &Node{Size: 1 << 20, Apparent: 1 << 30}
+	if got := totals(sparse, false); got != "1.0 MiB on disk · 1.0 GiB apparent" {
+		t.Errorf("on-disk first, got %q", got)
+	}
+	if got := totals(sparse, true); got != "1.0 GiB apparent · 1.0 MiB on disk" {
+		t.Errorf("apparent first, got %q", got)
+	}
+}

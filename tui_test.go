@@ -34,7 +34,7 @@ func TestExplorerNav(t *testing.T) {
 		{Name: "a", Size: 200},
 		{Name: "b", Size: 100},
 	}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 
 	// j moves down; two presses in one read land on the last row.
@@ -91,7 +91,7 @@ func TestExplorerEsc(t *testing.T) {
 		{Name: "x", Size: 50},
 	}}
 	root := &Node{Name: "root", IsDir: true, Size: 100, Children: []*Node{sub}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 
 	e.handle([]byte("l")) // descend into sub
@@ -123,12 +123,12 @@ func TestExplorerRescan(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(sub, "a.txt"), 1000)
 
-	sc := &scanner{apparent: true}
+	sc := &scanner{}
 	root, err := scan(dir, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
 	rootFiles := root.Files
 
@@ -155,7 +155,7 @@ func TestExplorerStale(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.txt"), 100)
 
-	sc := &scanner{apparent: true}
+	sc := &scanner{}
 	root, err := scan(dir, sc)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +230,7 @@ func TestDisplayPath(t *testing.T) {
 // it, while q still quits.
 func TestExplorerHelp(t *testing.T) {
 	root := &Node{Name: "root", IsDir: true, Children: []*Node{{Name: "a", Size: 1}}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 
 	e.handle([]byte("?"))
@@ -255,18 +255,18 @@ func TestExplorerHelp(t *testing.T) {
 // TestHeadLabel checks that the changed-on-disk marker shows only when stale.
 func TestHeadLabel(t *testing.T) {
 	n := &Node{Path: "/x", IsDir: true, Size: 2048, Files: 3, Dirs: 1}
-	if strings.Contains(headLabel(n, false), "●") {
+	if strings.Contains(headLabel(n, false, false), "●") {
 		t.Error("a clean directory header should not carry the marker")
 	}
-	if !strings.Contains(headLabel(n, true), "●") {
+	if !strings.Contains(headLabel(n, true, false), "●") {
 		t.Error("a stale directory header should carry the marker")
 	}
 	// The path now lives on its own line above; the totals line carries the size
 	// and counts, not the path.
-	if strings.Contains(headLabel(n, false), "/x") {
+	if strings.Contains(headLabel(n, false, false), "/x") {
 		t.Error("the path should no longer be in the totals line")
 	}
-	if got := headLabel(n, false); !strings.Contains(got, "2.0 KiB") || !strings.Contains(got, "dirs") {
+	if got := headLabel(n, false, false); !strings.Contains(got, "2.0 KiB") || !strings.Contains(got, "dirs") {
 		t.Errorf("totals line should carry the size and dirs, got %q", got)
 	}
 }
@@ -302,7 +302,7 @@ func TestExplorerHidden(t *testing.T) {
 		{Name: "visible", Size: 200},
 		{Name: ".hidden", Size: 100},
 	}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 
 	if got := len(e.children()); got != 2 {
@@ -357,7 +357,7 @@ func TestExplorerMarkToggle(t *testing.T) {
 		{Name: "a", Path: "root/a", Size: 200},
 		{Name: "b", Path: "root/b", Size: 100},
 	}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 
 	first := e.children()[0]
@@ -403,13 +403,13 @@ func TestOpenEntryEmpty(t *testing.T) {
 // TestMarkIndicator checks the leading gutter span rowSpans adds for marked rows.
 func TestMarkIndicator(t *testing.T) {
 	n := &Node{Name: "x", Size: 10}
-	if got := rowSpans(n, 100, true)[0].text; got != "* " {
+	if got := rowSpans(n, 100, true, false)[0].text; got != "* " {
 		t.Errorf("marked gutter = %q, want %q", got, "* ")
 	}
-	if got := rowSpans(n, 100, false)[0].text; got != "  " {
+	if got := rowSpans(n, 100, false, false)[0].text; got != "  " {
 		t.Errorf("unmarked gutter = %q, want %q", got, "  ")
 	}
-	if got := rowSpans(n, 100, false)[1].text; !strings.Contains(got, "10 B") {
+	if got := rowSpans(n, 100, false, false)[1].text; !strings.Contains(got, "10 B") {
 		t.Errorf("size span should still follow the gutter, got %q", got)
 	}
 }
@@ -420,8 +420,8 @@ func TestJumpToLocation(t *testing.T) {
 	x := &Node{Name: "x", Path: "root/sub/x", Size: 50}
 	sub := &Node{Name: "sub", Path: "root/sub", IsDir: true, Size: 50, Children: []*Node{x}}
 	root := &Node{Name: "root", Path: "root", IsDir: true, Size: 50, Children: []*Node{sub}}
-	sortChildren(root)
-	sortChildren(sub)
+	sortChildren(root, false)
+	sortChildren(sub, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 
 	e.handle([]byte("l")) // into sub
@@ -462,7 +462,7 @@ func TestJumpRevealsDotfile(t *testing.T) {
 	hid := &Node{Name: ".hidden", Path: "root/.hidden", IsDir: true, Size: 10, Children: []*Node{x}}
 	vis := &Node{Name: "vis", Path: "root/vis", IsDir: true, Size: 20}
 	root := &Node{Name: "root", Path: "root", IsDir: true, Size: 30, Children: []*Node{vis, hid}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, hideDot: true}
 	e.marked = map[string]bool{"root/.hidden/x": true}
 	e.marks = []string{"root/.hidden/x"}
@@ -485,7 +485,7 @@ func TestUnmarkFromPanel(t *testing.T) {
 		{Name: "a", Path: "root/a", Size: 2},
 		{Name: "b", Path: "root/b", Size: 1},
 	}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 	e.set(0)
 	e.handle([]byte("m"))
@@ -530,12 +530,12 @@ func TestMarksSurviveRescan(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.txt"), 1000)
 
-	sc := &scanner{apparent: true}
+	sc := &scanner{}
 	root, err := scan(dir, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
 
 	marked := e.selected()
@@ -558,7 +558,7 @@ func TestMarksSurviveRescan(t *testing.T) {
 	if fresh == nil {
 		t.Fatalf("fresh node for %q not found after rescan", marked.Path)
 	}
-	if rowSpans(fresh, e.cur().Size, e.marked[fresh.Path])[0].text != "* " {
+	if rowSpans(fresh, e.cur().Size, e.marked[fresh.Path], false)[0].text != "* " {
 		t.Fatal("the rescanned node should render the mark gutter")
 	}
 }
@@ -575,13 +575,15 @@ func TestRescanKeepsCursorWithDotfilesHidden(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "sub", "f"), 1000)
 	writeFile(t, filepath.Join(dir, "aaa"), 50)
 
-	sc := &scanner{apparent: true}
+	sc := &scanner{}
 	root, err := scan(dir, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sortChildren(root)
-	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
+	// Sort by apparent size, where the order above is exact; on disk, a 50-byte
+	// file and a directory holding one small file can both round to one block.
+	sortChildren(root, true)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc, apparent: true}
 
 	e.handle([]byte(".")) // hide .big; visible: sub, aaa
 	if got := e.selected(); got == nil || got.Name != "sub" {
@@ -639,7 +641,7 @@ func TestSS3Sequences(t *testing.T) {
 		{Name: "b", Size: 20},
 		{Name: "c", Size: 10},
 	}}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
 
 	e.handle([]byte{27, 'O', 'B'}) // SS3 down
@@ -668,8 +670,8 @@ func TestAdopt(t *testing.T) {
 		oldSub,
 		{Name: "a", Path: "root/a", Size: 50},
 	}}
-	sortChildren(oldRoot)
-	sortChildren(oldSub)
+	sortChildren(oldRoot, false)
+	sortChildren(oldSub, false)
 	e := &explorer{stack: []*Node{oldRoot, oldSub}, sel: []int{0, 1}, off: []int{0, 0}}
 	if e.selected().Path != "root/sub/y" {
 		t.Fatalf("setup: cursor on %q, want root/sub/y", e.selected().Path)
@@ -822,12 +824,12 @@ func TestRescanRunsInBackground(t *testing.T) {
 	writeFile(t, filepath.Join(sub, "a.txt"), 1000)
 	writeFile(t, filepath.Join(dir, "top.txt"), 10)
 
-	sc := &scanner{apparent: true}
+	sc := &scanner{}
 	root, err := scan(dir, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sortChildren(root)
+	sortChildren(root, false)
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
 	for i, c := range e.children() {
 		if c.Name == "sub" {
@@ -867,9 +869,46 @@ func TestRescanRunsInBackground(t *testing.T) {
 // TestRowSpansEscapeName checks the explorer never draws a raw control byte
 // from a file name.
 func TestRowSpansEscapeName(t *testing.T) {
-	for _, sp := range rowSpans(&Node{Name: "a\x1b[2Jb\nc"}, 1, false) {
+	for _, sp := range rowSpans(&Node{Name: "a\x1b[2Jb\nc"}, 1, false, false) {
 		if strings.ContainsAny(sp.text, "\x1b\n") {
 			t.Errorf("row span leaked a control byte: %q", sp.text)
 		}
+	}
+}
+
+// TestToggleMeasure checks 'a' re-sorts every open level by the other size and
+// keeps the cursor on the same entry, and that the header switches with it.
+func TestToggleMeasure(t *testing.T) {
+	// sparse is huge apparent but tiny on disk; packed is the reverse.
+	sparse := &Node{Name: "sparse", Path: "r/sparse", Size: 100, Apparent: 9000}
+	packed := &Node{Name: "packed", Path: "r/packed", Size: 5000, Apparent: 5000}
+	root := &Node{Name: "r", Path: "r", IsDir: true, Size: 5100, Apparent: 14000,
+		Children: []*Node{sparse, packed}}
+	sortChildren(root, false)
+	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}}
+	if e.children()[0] != packed {
+		t.Fatalf("on disk, packed should sort first, got %q", e.children()[0].Name)
+	}
+	e.set(1) // cursor on sparse
+	e.handle([]byte("a"))
+	if !e.apparent {
+		t.Fatal("a should switch to apparent size")
+	}
+	if e.children()[0] != sparse {
+		t.Fatalf("by apparent size, sparse should sort first, got %q", e.children()[0].Name)
+	}
+	if e.selected() != sparse {
+		t.Fatalf("the cursor should follow its entry across the re-sort, got %q", e.selected().Name)
+	}
+	if got := rowSpans(sparse, root.bytes(true), false, true)[1].text; !strings.Contains(got, "8.8 KiB") {
+		t.Errorf("row should show the apparent size, got %q", got)
+	}
+	head := headLabel(root, false, true)
+	if !strings.Contains(head, "13.7 KiB apparent") || !strings.Contains(head, "5.0 KiB on disk") {
+		t.Errorf("header should show both sizes, apparent first, got %q", head)
+	}
+	e.handle([]byte("a"))
+	if e.apparent || e.children()[0] != packed {
+		t.Fatal("a again should switch back to size on disk")
 	}
 }

@@ -8,7 +8,8 @@ import (
 )
 
 // TestScan builds a small tree inside the worktree and checks the aggregated
-// counts and apparent sizes.
+// counts and sizes (asserting on apparent sizes, which are exact on any
+// filesystem).
 func TestScan(t *testing.T) {
 	dir := t.TempDir()
 
@@ -19,9 +20,7 @@ func TestScan(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "sub", "b.txt"), 2000)
 	writeFile(t, filepath.Join(dir, "sub", "c.txt"), 500)
 
-	// Apparent mode so file sizes are exact and independent of the filesystem
-	// block size.
-	root, err := scan(dir, &scanner{apparent: true})
+	root, err := scan(dir, &scanner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +35,7 @@ func TestScan(t *testing.T) {
 	var fileBytes int64
 	walk(root, func(n *Node) {
 		if !n.IsDir {
-			fileBytes += n.Size
+			fileBytes += n.Apparent
 		}
 	})
 	if fileBytes != 3500 {
@@ -44,8 +43,8 @@ func TestScan(t *testing.T) {
 	}
 
 	// The directory total must include at least the file contents.
-	if root.Size < 3500 {
-		t.Errorf("root size = %d, want >= 3500", root.Size)
+	if root.Apparent < 3500 {
+		t.Errorf("root apparent size = %d, want >= 3500", root.Apparent)
 	}
 }
 
@@ -56,7 +55,7 @@ func TestExclude(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "keep.txt"), 100)
 	writeFile(t, filepath.Join(dir, "skip.log"), 100)
 
-	root, err := scan(dir, &scanner{apparent: true, excludes: []string{"*.log"}})
+	root, err := scan(dir, &scanner{excludes: []string{"*.log"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +107,7 @@ func TestSnapshotWhileScanning(t *testing.T) {
 		}
 	}
 
-	sc := &scanner{apparent: true}
+	sc := &scanner{}
 	root, done, err := scanStart(dir, sc)
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +121,7 @@ func TestSnapshotWhileScanning(t *testing.T) {
 			var sum int64
 			walk(root, func(n *Node) {
 				if !n.IsDir {
-					sum += n.Size
+					sum += n.Apparent
 				}
 			})
 			if sum != 4000 {
@@ -132,13 +131,18 @@ func TestSnapshotWhileScanning(t *testing.T) {
 		default:
 			snap := sc.snapshot(root)
 			walk(snap, func(n *Node) {
-				var kids int64
+				var kids, kidsApparent int64
 				for _, c := range n.Children {
 					kids += c.Size
+					kidsApparent += c.Apparent
 				}
 				if n.Size != n.Self+kids {
 					t.Fatalf("inconsistent snapshot at %s: size %d != self %d + children %d",
 						n.Path, n.Size, n.Self, kids)
+				}
+				if n.Apparent != n.ApparentSelf+kidsApparent {
+					t.Fatalf("inconsistent snapshot at %s: apparent %d != self %d + children %d",
+						n.Path, n.Apparent, n.ApparentSelf, kidsApparent)
 				}
 			})
 		}
@@ -167,5 +171,29 @@ func writeFile(t *testing.T, path string, n int) {
 	t.Helper()
 	if err := os.WriteFile(path, make([]byte, n), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestBothSizes checks every node carries both measures: the apparent size is
+// the exact byte count and the on-disk size comes in whole 512-byte blocks.
+func TestBothSizes(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "f"), 1000)
+	root, err := scan(dir, &scanner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := root.Children[0]
+	if f.Apparent != 1000 || f.ApparentSelf != 1000 {
+		t.Errorf("apparent = %d/%d, want 1000", f.Apparent, f.ApparentSelf)
+	}
+	if f.Size%512 != 0 || f.Size != f.Self {
+		t.Errorf("on-disk size = %d/%d, want whole blocks", f.Size, f.Self)
+	}
+	if root.Apparent != root.ApparentSelf+1000 {
+		t.Errorf("root apparent = %d, want self %d + 1000", root.Apparent, root.ApparentSelf)
+	}
+	if f.bytes(true) != f.Apparent || f.bytes(false) != f.Size {
+		t.Error("bytes should pick the measure")
 	}
 }

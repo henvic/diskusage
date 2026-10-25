@@ -34,7 +34,7 @@ func TestScanSkipsKernFS(t *testing.T) {
 	if err := os.Symlink("/proc", filepath.Join(dir, "p")); err != nil {
 		t.Skipf("symlinks unsupported here: %v", err)
 	}
-	root, err := scan(dir, &scanner{apparent: true, follow: true})
+	root, err := scan(dir, &scanner{follow: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestScanSkipsKernFS(t *testing.T) {
 		}
 	}
 
-	proc, err := scan("/proc/self", &scanner{apparent: true})
+	proc, err := scan("/proc/self", &scanner{})
 	if err != nil {
 		t.Fatal(err)
 	}

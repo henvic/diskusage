@@ -147,7 +147,7 @@ func run() error {
 	flag.BoolVar(&o.tree, "tree", false, "print a size-sorted tree")
 	flag.BoolVar(&o.files, "files", false, "list the largest files in the subtree")
 	flag.BoolVar(&o.jsonOut, "json", false, "emit the full tree as JSON")
-	flag.BoolVar(&o.apparent, "apparent", false, "measure apparent size instead of disk blocks")
+	flag.BoolVar(&o.apparent, "apparent", false, "show and sort by apparent size instead of space on disk")
 	flag.BoolVar(&o.follow, "L", false, "follow symbolic links")
 	flag.BoolVar(&o.oneFS, "x", false, "stay on a single filesystem")
 	flag.BoolVar(&o.noColor, "no-color", false, "disable colored output")
@@ -201,7 +201,6 @@ func run() error {
 	useColor = colorOK && (isTTY(os.Stdout) || o.interactive)
 
 	s := &scanner{
-		apparent: o.apparent,
 		follow:   o.follow,
 		oneFS:    o.oneFS,
 		excludes: o.excludes,
@@ -213,7 +212,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		marks, err := runTUI(root, path, s, done)
+		marks, err := runTUI(root, path, s, done, o.apparent)
 		if err != nil {
 			if o.interactive {
 				return fmt.Errorf("cannot open the interactive explorer: %w", err)
@@ -264,8 +263,9 @@ func usage() {
 Usage:
   diskusage [flags] [path] [flags]
 
-With no path it scans the current directory. Size is measured in allocated disk
-blocks (matching du); pass --apparent for logical file sizes. On a terminal it
+With no path it scans the current directory. Entries are sorted by the space
+they use on disk (matching du); --apparent sorts by apparent (logical) size
+instead, and the totals show both whenever they differ. On a terminal it
 opens an interactive explorer by default; with --print or a format flag, or when
 output is piped, it prints instead. -i opens the explorer even when output is
 piped, so marked paths can feed another command. Flags may come before or after
@@ -280,7 +280,7 @@ Interactive keys:
   c / C  copy absolute / relative path     f  open folder in file manager
   r  rescan from disk        g/G  first/last           ?  show keys
   .  show/hide dotfiles      m  mark / unmark           M  marks panel
-  o  open in default app     q or Ctrl-C  quit
+  o  open in default app     a  on disk / apparent     q or Ctrl-C  quit
 A ● in the header marks the current directory as changed on disk since scanned.
 Entries you mark with m are printed as absolute paths when you quit.
 Kernel filesystems mounted below the path (/proc, /sys, ...) are skipped.

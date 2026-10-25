@@ -18,7 +18,7 @@ func TestHardlinksCountedOnce(t *testing.T) {
 		t.Skipf("hardlinks unsupported here: %v", err)
 	}
 
-	root, err := scan(dir, &scanner{apparent: true})
+	root, err := scan(dir, &scanner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestHardlinksCountedOnce(t *testing.T) {
 	files := 0
 	walk(root, func(n *Node) {
 		if !n.IsDir {
-			sum += n.Size
+			sum += n.Apparent
 			files++
 		}
 	})
@@ -50,7 +50,7 @@ func TestSymlinkListed(t *testing.T) {
 		t.Skipf("symlinks unsupported here: %v", err)
 	}
 
-	root, err := scan(dir, &scanner{apparent: true})
+	root, err := scan(dir, &scanner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +63,8 @@ func TestSymlinkListed(t *testing.T) {
 	if ln == nil {
 		t.Fatal("the symlink should be listed as an entry")
 	}
-	if ln.Size >= 100 {
-		t.Errorf("symlink size = %d, want the link itself, not the 100-byte target", ln.Size)
+	if ln.Apparent >= 100 {
+		t.Errorf("symlink size = %d, want the link itself, not the 100-byte target", ln.Apparent)
 	}
 	if root.Files != 2 {
 		t.Errorf("files = %d, want 2 (target + link)", root.Files)
@@ -84,7 +84,7 @@ func TestFollowCycleScansOnce(t *testing.T) {
 		t.Skipf("symlinks unsupported here: %v", err)
 	}
 
-	root, err := scan(dir, &scanner{apparent: true, follow: true})
+	root, err := scan(dir, &scanner{follow: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestFollowRepeatedFileTargetOnce(t *testing.T) {
 		}
 	}
 
-	root, err := scan(dir, &scanner{apparent: true, follow: true})
+	root, err := scan(dir, &scanner{follow: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestFollowRepeatedFileTargetOnce(t *testing.T) {
 	var sum int64
 	walk(root, func(n *Node) {
 		if !n.IsDir {
-			sum += n.Size
+			sum += n.Apparent
 		}
 	})
 	if sum != 1000 {
@@ -152,13 +152,13 @@ func TestRescanKeepsHardlinkDedup(t *testing.T) {
 		t.Skipf("hardlinks unsupported here: %v", err)
 	}
 
-	sc := &scanner{apparent: true}
+	sc := &scanner{}
 	root, err := scan(dir, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sortChildren(root)
-	before := root.Size
+	sortChildren(root, false)
+	before := root.Apparent
 
 	e := &explorer{stack: []*Node{root}, sel: []int{0}, off: []int{0}, sc: sc}
 	// Select sub by name: where it sorts depends on the filesystem, since a
@@ -173,7 +173,7 @@ func TestRescanKeepsHardlinkDedup(t *testing.T) {
 		t.Fatalf("setup: expected to be in sub, got %q", e.cur().Name)
 	}
 	rescanNow(t, e)
-	if got := e.stack[0].Size; got != before {
+	if got := e.stack[0].Apparent; got != before {
 		t.Errorf("root size after subtree rescan = %d, want %d (hardlink must stay counted once)", got, before)
 	}
 }

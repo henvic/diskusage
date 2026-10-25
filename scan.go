@@ -11,29 +11,42 @@ import (
 	"sync/atomic"
 )
 
-// Node is one entry (file or directory) in the scanned tree. Sizes are in
-// bytes and use whatever measure the scanner was configured with (allocated
-// disk blocks by default, apparent size with --apparent).
+// Node is one entry (file or directory) in the scanned tree. Every node carries
+// two sizes in bytes: the space allocated on disk (Size and Self, matching du)
+// and the apparent, logical length (Apparent and ApparentSelf, matching ls).
+// They differ for sparse files, compressed files, cloud-only placeholders, and
+// the block rounding of small files. Which one is shown and sorted by is a
+// display choice (--apparent, or a key in the explorer), not a scan option.
 type Node struct {
-	Name     string  `json:"name"`
-	Path     string  `json:"path"`
-	IsDir    bool    `json:"dir"`
-	Size     int64   `json:"size"`  // this entry plus everything beneath it
-	Self     int64   `json:"self"`  // just this entry (the dir inode, or the file)
-	Files    int64   `json:"files"` // regular files in the subtree
-	Dirs     int64   `json:"dirs"`  // directories in the subtree, excluding self
-	Children []*Node `json:"children,omitempty"`
-	Err      string  `json:"error,omitempty"` // why the directory could not be read
+	Name         string  `json:"name"`
+	Path         string  `json:"path"`
+	IsDir        bool    `json:"dir"`
+	Size         int64   `json:"size"`         // on disk: this entry plus everything beneath it
+	Self         int64   `json:"self"`         // on disk: just this entry (the dir inode, or the file)
+	Apparent     int64   `json:"apparent"`     // logical: this entry plus everything beneath it
+	ApparentSelf int64   `json:"apparentSelf"` // logical: just this entry
+	Files        int64   `json:"files"`        // regular files in the subtree
+	Dirs         int64   `json:"dirs"`         // directories in the subtree, excluding self
+	Children     []*Node `json:"children,omitempty"`
+	Err          string  `json:"error,omitempty"` // why the directory could not be read
 
 	// parent points up the tree so attach can fold each new entry into every
 	// ancestor's totals as it is discovered (nil at a scan root).
 	parent *Node
 }
 
+// bytes is the node's total under the chosen measure: apparent size, or the
+// space used on disk.
+func (n *Node) bytes(apparent bool) int64 {
+	if apparent {
+		return n.Apparent
+	}
+	return n.Size
+}
+
 // scanner holds the configuration and shared counters for one scan. A zero
 // scanner is usable; Scan fills in the rest.
 type scanner struct {
-	apparent bool // measure logical file size instead of disk blocks
 	follow   bool // resolve symlinks instead of counting the link itself
 	oneFS    bool // do not descend into other filesystems
 	excludes []string
@@ -91,8 +104,8 @@ func scanStart(root string, s *scanner) (*Node, <-chan struct{}, error) {
 
 	done := make(chan struct{})
 	n := &Node{Name: filepath.Base(root), Path: root, IsDir: info.IsDir()}
-	n.Self = s.bytes(info)
-	n.Size = n.Self
+	n.Self, n.ApparentSelf = measure(info)
+	n.Size, n.Apparent = n.Self, n.ApparentSelf
 	s.scanned.Add(1)
 
 	if !n.IsDir {
@@ -127,15 +140,14 @@ func clone(n, parent *Node) *Node {
 	return &c
 }
 
-// bytes reports how many bytes info occupies under the active measure.
-func (s *scanner) bytes(info fs.FileInfo) int64 {
-	if s.apparent {
-		return info.Size()
-	}
+// measure reports both sizes of info: the bytes allocated on disk and the
+// apparent length. Without platform block counts the two are the same.
+func measure(info fs.FileInfo) (disk, apparent int64) {
+	apparent = info.Size()
 	if b, _, ok := diskUsage(info); ok {
-		return b
+		return b, apparent
 	}
-	return info.Size()
+	return apparent, apparent
 }
 
 // fill reads path's entries into the already-published node n, recursing
@@ -196,8 +208,8 @@ func (s *scanner) fill(n *Node, path string, dev uint64) {
 				s.attach(n, child)
 				continue
 			}
-			child.Self = s.bytes(ci)
-			child.Size = child.Self
+			child.Self, child.ApparentSelf = measure(ci)
+			child.Size, child.Apparent = child.Self, child.ApparentSelf
 			s.attach(n, child)
 			s.scanned.Add(1)
 			// Spawn a worker if a slot is free, otherwise recurse inline. The
@@ -221,9 +233,9 @@ func (s *scanner) fill(n *Node, path string, dev uint64) {
 		// match du (which path carries the size depends on scan order).
 		child := &Node{Name: name, Path: childPath}
 		if !s.dupFile(ci, childPath) {
-			child.Self = s.bytes(ci)
+			child.Self, child.ApparentSelf = measure(ci)
 		}
-		child.Size = child.Self
+		child.Size, child.Apparent = child.Self, child.ApparentSelf
 		child.Files = 1
 		s.attach(n, child)
 		s.scanned.Add(1)
@@ -243,6 +255,7 @@ func (s *scanner) attach(parent, child *Node) {
 	parent.Children = append(parent.Children, child)
 	for p := parent; p != nil; p = p.parent {
 		p.Size += child.Self
+		p.Apparent += child.ApparentSelf
 		p.Files += child.Files
 		if child.IsDir {
 			p.Dirs++
@@ -328,13 +341,13 @@ func (s *scanner) excluded(path, name string) bool {
 	return false
 }
 
-// sortChildren orders a node's children largest first, breaking ties by name
-// so output is stable.
-func sortChildren(n *Node) {
+// sortChildren orders a node's children largest first under the chosen
+// measure, breaking ties by name so output is stable.
+func sortChildren(n *Node, apparent bool) {
 	sort.Slice(n.Children, func(i, j int) bool {
 		a, b := n.Children[i], n.Children[j]
-		if a.Size != b.Size {
-			return a.Size > b.Size
+		if as, bs := a.bytes(apparent), b.bytes(apparent); as != bs {
+			return as > bs
 		}
 		return a.Name < b.Name
 	})

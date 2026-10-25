@@ -45,6 +45,10 @@ type explorer struct {
 	help    bool   // the key reference overlay is showing
 	hideDot bool   // hide dot ("hidden") entries from the listing
 
+	// apparent shows and sorts by apparent size instead of space on disk (the
+	// 'a' key). Both sizes are in every node, so switching is a re-sort only.
+	apparent bool
+
 	// marks is a session-only staging area of entries to revisit, keyed by
 	// Node.Path so they survive a rescan (which replaces nodes but reproduces the
 	// same paths). marksView is a second overlay, modeled on help.
@@ -78,8 +82,8 @@ const escDelay = 250 * time.Millisecond
 // restores the terminal, even on Ctrl-C. root may still be filling in: until
 // done closes, the explorer browses periodic snapshots of the tree (the live
 // nodes are only safe to read through scanner.snapshot), then it adopts the
-// finished tree.
-func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}) ([]string, error) {
+// finished tree. apparent picks the size measure the explorer starts with.
+func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}, apparent bool) ([]string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -145,10 +149,10 @@ func runTUI(root *Node, path string, sc *scanner, done <-chan struct{}) ([]strin
 	if scanning {
 		browse = sc.snapshot(root)
 	}
-	sortChildren(browse)
+	sortChildren(browse, apparent)
 
 	wd, _ := os.Getwd() // launch dir; the program never chdirs, so it holds until quit
-	e := &explorer{stack: []*Node{browse}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc, wd: wd}
+	e := &explorer{stack: []*Node{browse}, sel: []int{0}, off: []int{0}, tty: tty, sc: sc, wd: wd, apparent: apparent}
 	e.scanning = scanning
 	e.measure()
 
@@ -336,7 +340,7 @@ func (e *explorer) adopt(root *Node) {
 		}
 	}
 
-	sortChildren(root)
+	sortChildren(root, e.apparent)
 	stack, sel, off := []*Node{root}, []int{0}, []int{0}
 	for d := 1; d < len(e.stack); d++ {
 		var next *Node
@@ -349,7 +353,7 @@ func (e *explorer) adopt(root *Node) {
 		if next == nil {
 			break
 		}
-		sortChildren(next)
+		sortChildren(next, e.apparent)
 		stack = append(stack, next)
 		sel = append(sel, 0)
 		off = append(off, e.off[d])
@@ -527,6 +531,8 @@ func (e *explorer) handle(b []byte) bool {
 			e.rescan()
 		case '.':
 			e.toggleHidden()
+		case 'a':
+			e.toggleMeasure()
 		case 'm':
 			e.toggleMark()
 		case 'M':
@@ -569,10 +575,22 @@ func (e *explorer) hiddenSize() int64 {
 	var n int64
 	for _, c := range e.cur().Children {
 		if strings.HasPrefix(c.Name, ".") {
-			n += c.Size
+			n += c.bytes(e.apparent)
 		}
 	}
 	return n
+}
+
+// toggleMeasure switches the listing between size on disk and apparent size,
+// re-sorting every open level while keeping the cursor on the same entries.
+func (e *explorer) toggleMeasure() {
+	e.apparent = !e.apparent
+	e.adopt(e.stack[0])
+	if e.apparent {
+		e.status = "showing apparent size — press a for size on disk"
+	} else {
+		e.status = "showing size on disk — press a for apparent size"
+	}
 }
 
 // toggleHidden flips the dotfile filter, keeping each level's cursor on the same
@@ -844,7 +862,7 @@ func (e *explorer) finishRescan() {
 	e.job = nil
 	<-job.done // already closed when called from the loop; waits in tests
 	fresh, old := job.fresh, job.old
-	sortChildren(fresh)
+	sortChildren(fresh, e.apparent)
 
 	root := e.stack[0]
 	chain := locate(root, old.Path)
@@ -866,10 +884,12 @@ func (e *explorer) finishRescan() {
 		// Every ancestor's totals include this subtree, so shift them all by
 		// the same delta.
 		dSize := fresh.Size - old.Size
+		dApparent := fresh.Apparent - old.Apparent
 		dFiles := fresh.Files - old.Files
 		dDirs := fresh.Dirs - old.Dirs
 		for _, a := range chain[:len(chain)-1] {
 			a.Size += dSize
+			a.Apparent += dApparent
 			a.Files += dFiles
 			a.Dirs += dDirs
 		}
@@ -914,7 +934,7 @@ func (e *explorer) descend() {
 	if !child.IsDir {
 		return
 	}
-	sortChildren(child)
+	sortChildren(child, e.apparent)
 	e.stack = append(e.stack, child)
 	e.sel = append(e.sel, 0)
 	e.off = append(e.off, 0)
@@ -948,7 +968,7 @@ func (e *explorer) render() {
 		return
 	}
 	cur := e.cur()
-	total := cur.Size
+	total := cur.bytes(e.apparent)
 	kids := e.children()
 	body := rows - 3
 
@@ -967,7 +987,7 @@ func (e *explorer) render() {
 	var sb strings.Builder
 	sb.WriteString("\x1b[H")
 
-	head := headLabel(cur, e.stale)
+	head := headLabel(cur, e.stale, e.apparent)
 	if e.scanning && e.sc != nil {
 		head += fmt.Sprintf("   ⟳ scanning… %s items", comma(e.sc.scanned.Load()))
 	}
@@ -1009,7 +1029,7 @@ func (e *explorer) render() {
 			sb.WriteString("\r\n")
 			continue
 		}
-		spans := rowSpans(kids[idx], total, e.marked[kids[idx].Path])
+		spans := rowSpans(kids[idx], total, e.marked[kids[idx].Path], e.apparent)
 		if idx == sel {
 			// The highlighted row sits under a row-wide reverse-video (or flash)
 			// highlight, so its spans carry no color resets that would cut the
@@ -1064,6 +1084,7 @@ func (e *explorer) renderHelp(rows, cols int) {
 		"  f                 open folder in file manager",
 		"  r                 rescan from disk",
 		"  .                 show/hide dotfiles",
+		"  a                 size on disk / apparent size",
 		"  m                 mark / unmark entry",
 		"  M                 marks panel",
 		"  ?                 toggle this help",
@@ -1288,12 +1309,12 @@ func (e *explorer) renderMarks(rows, cols int) {
 	fmt.Fprint(e.tty, sb.String())
 }
 
-// headLabel is the second header line: the current directory's totals, plus a
-// marker when it has changed on disk since scanned. The absolute path is drawn on
-// the line above it.
-func headLabel(n *Node, stale bool) string {
+// headLabel is the second header line: the current directory's totals (both
+// sizes when they differ, the active measure first), plus a marker when it has
+// changed on disk since scanned. The absolute path is drawn on the line above it.
+func headLabel(n *Node, stale, apparent bool) string {
 	s := fmt.Sprintf(" %s · %s files · %s dirs",
-		humanize(n.Size), comma(n.Files), comma(n.Dirs))
+		totals(n, apparent), comma(n.Files), comma(n.Dirs))
 	if n.Err != "" {
 		s += "   · unreadable"
 	}
@@ -1317,10 +1338,11 @@ type styledSpan struct {
 // usage bar, two spaces, and the name (bold blue with a trailing slash for
 // directories). The segments are returned untruncated; fitSpans lays them out to
 // the available width.
-func rowSpans(n *Node, total int64, marked bool) []styledSpan {
+func rowSpans(n *Node, total int64, marked, apparent bool) []styledSpan {
+	size := n.bytes(apparent)
 	frac := 0.0
 	if total > 0 {
-		frac = float64(n.Size) / float64(total)
+		frac = float64(size) / float64(total)
 	}
 	name := safe(n.Name)
 	nameCode := ""
@@ -1334,7 +1356,7 @@ func rowSpans(n *Node, total int64, marked bool) []styledSpan {
 	}
 	spans := []styledSpan{
 		{gutter, gutterCode},
-		{fmt.Sprintf("%10s ", humanize(n.Size)), ""},
+		{fmt.Sprintf("%10s ", humanize(size)), ""},
 		{fmt.Sprintf("%4.0f%%", frac*100), "2"},
 		{" ", ""},
 		{bar(frac, 16), "36"},

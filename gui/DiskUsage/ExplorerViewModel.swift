@@ -23,6 +23,13 @@ final class ExplorerViewModel: ObservableObject {
     /// the list stays cheap.
     @Published private(set) var rows: [Entry] = []
     @Published private(set) var rowsTotal: Int64 = 0
+    /// Bumped when rows that stay on screen change order relative to each
+    /// other (switching measure, or a rescan that reshuffles sizes). The list
+    /// is rebuilt instead of diffed then: a SwiftUI List that moves existing
+    /// rows trips AppKit's "reentrant operation in its NSTableView delegate"
+    /// warning, which Apple says will become an assert (reproduced with a
+    /// bare List, none of this app's code involved).
+    @Published private(set) var listGeneration = 0
 
     @Published private(set) var isScanning = false
     @Published private(set) var scannedCount: Int64 = 0
@@ -178,11 +185,24 @@ final class ExplorerViewModel: ObservableObject {
             if sa != sb { return sa > sb }
             return a.name < b.name
         }
+        if reordered(from: rows, to: kids) {
+            listGeneration += 1
+        }
         rows = kids
         rowsTotal = current.bytes(measure)
         if selection == nil || !kids.contains(where: { $0.id == selection }) {
             selection = kids.first?.id
         }
+    }
+
+    /// Whether rows present in both listings appear in a different order,
+    /// ignoring rows that were added or removed.
+    private func reordered(from old: [Entry], to new: [Entry]) -> Bool {
+        let newIDs = Set(new.map(\.id))
+        let oldIDs = Set(old.map(\.id))
+        let kept = old.lazy.map(\.id).filter(newIDs.contains)
+        let now = new.lazy.map(\.id).filter(oldIDs.contains)
+        return !kept.elementsEqual(now)
     }
 
     func entry(at path: String?) -> Entry? {

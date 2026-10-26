@@ -231,34 +231,52 @@ private struct ExplorerListView: View {
         let total = viewModel.rowsTotal
         let measure = viewModel.measure
         let marked = viewModel.markedSet
-        List(viewModel.rows, selection: $viewModel.selection) { entry in
-            RowView(entry: entry, total: total, measure: measure, isMarked: marked.contains(entry.id))
-                .equatable()
-        }
-        .listStyle(.plain)
-        // The list's context menu, and its primary action for Return. Plain
-        // left clicks never reach the list: ExplorerViewModel.handleRowClick
-        // takes them (select, star, double-click to open), because the
-        // table's own click tracking swallows a Space pressed mid-click.
-        .contextMenu(forSelectionType: String.self) { ids in
-            if let entry = viewModel.entry(at: ids.first) {
-                Button("Open") { viewModel.openEntry(entry) }
-                Divider()
-                Button("Copy Path") { viewModel.copyPath(entry.id) }
-                Button("Reveal in Finder") { viewModel.revealInFinder(entry.id) }
+        ScrollViewReader { proxy in
+            List(viewModel.rows, selection: $viewModel.selection) { entry in
+                RowView(entry: entry, total: total, measure: measure, isMarked: marked.contains(entry.id))
+                    .equatable()
             }
-        } primaryAction: { ids in
-            if let entry = viewModel.entry(at: ids.first) {
-                viewModel.openEntry(entry)
+            .listStyle(.plain)
+            // A re-sort rebuilds the list rather than moving its rows (see
+            // listGeneration); bring the selection back into view and keep the
+            // keyboard on the list afterwards.
+            .id(viewModel.listGeneration)
+            .onChange(of: viewModel.listGeneration) { _ in
+                // The rebuilt list is a new table. focused is still true from
+                // the old one, so drop it and set it again once the new table
+                // exists, or the keyboard stays on the table that went away.
+                focused = false
+                DispatchQueue.main.async {
+                    focused = true
+                    if let selection = viewModel.selection {
+                        proxy.scrollTo(selection, anchor: .center)
+                    }
+                }
             }
-        }
-        .focused($focused)
-        .onAppear { focused = true }
-        .onChange(of: viewModel.navigationPath) { _ in focused = true }
-        .overlay {
-            if viewModel.rows.isEmpty {
-                Text(viewModel.isScanning ? "Scanning…" : "(empty)")
-                    .foregroundStyle(.secondary)
+            // The list's context menu, and its primary action for Return. Plain
+            // left clicks never reach the list: ExplorerViewModel.handleRowClick
+            // takes them (select, star, double-click to open), because the
+            // table's own click tracking swallows a Space pressed mid-click.
+            .contextMenu(forSelectionType: String.self) { ids in
+                if let entry = viewModel.entry(at: ids.first) {
+                    Button("Open") { viewModel.openEntry(entry) }
+                    Divider()
+                    Button("Copy Path") { viewModel.copyPath(entry.id) }
+                    Button("Reveal in Finder") { viewModel.revealInFinder(entry.id) }
+                }
+            } primaryAction: { ids in
+                if let entry = viewModel.entry(at: ids.first) {
+                    viewModel.openEntry(entry)
+                }
+            }
+            .focused($focused)
+            .onAppear { focused = true }
+            .onChange(of: viewModel.navigationPath) { _ in focused = true }
+            .overlay {
+                if viewModel.rows.isEmpty {
+                    Text(viewModel.isScanning ? "Scanning…" : "(empty)")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }

@@ -6,6 +6,8 @@ path, so you can decide what to clean up. Think `du` with sorting, bars, and an
 interactive explorer that opens by default — using only the Go standard library,
 no dependencies.
 
+[![diskusage exploring /Applications](https://asciinema.org/a/uqbcxgkfIQX2Hp1w.svg)](https://asciinema.org/a/uqbcxgkfIQX2Hp1w)
+
 > [!WARNING]
 > Most of the code here is AI generated. It has been verified to work
 > correctly, but it is not human handcrafted.

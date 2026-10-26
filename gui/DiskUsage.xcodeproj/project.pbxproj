@@ -1,0 +1,317 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		CCCCCCCCCCCCCCCCCCCCCC01 /* DiskUsageApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB01 /* DiskUsageApp.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC02 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB02 /* ContentView.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC03 /* Node.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB03 /* Node.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC04 /* ScanOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB04 /* ScanOptions.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC05 /* DiskUsageProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB05 /* DiskUsageProcess.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC06 /* BinaryLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB06 /* BinaryLocator.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC07 /* ExplorerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB07 /* ExplorerViewModel.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC08 /* MeterBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB08 /* MeterBar.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC09 /* MarksPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB09 /* MarksPanel.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC10 /* ScanOptionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB10 /* ScanOptionsSheet.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC11 /* KeyboardShortcutsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB11 /* KeyboardShortcutsSheet.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC12 /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB12 /* Formatting.swift */; };
+		CCCCCCCCCCCCCCCCCCCCCC13 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB13 /* AppIcon.icon */; };
+		CCCCCCCCCCCCCCCCCCCCCC14 /* MeasureHelp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBBBBBBBBBBBBBBBBBBBB14 /* MeasureHelp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AAAAAAAAAAAAAAAAAAAAAA04 /* DiskUsage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DiskUsage.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BBBBBBBBBBBBBBBBBBBBBB01 /* DiskUsageApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskUsageApp.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB02 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB03 /* Node.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Node.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB04 /* ScanOptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanOptions.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB05 /* DiskUsageProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskUsageProcess.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB06 /* BinaryLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryLocator.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB07 /* ExplorerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplorerViewModel.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB08 /* MeterBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeterBar.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB09 /* MarksPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarksPanel.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB10 /* ScanOptionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanOptionsSheet.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB11 /* KeyboardShortcutsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcutsSheet.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB12 /* Formatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatting.swift; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB13 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		BBBBBBBBBBBBBBBBBBBBBB14 /* MeasureHelp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasureHelp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AAAAAAAAAAAAAAAAAAAAAA07 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AAAAAAAAAAAAAAAAAAAAAA02 = {
+			isa = PBXGroup;
+			children = (
+				AAAAAAAAAAAAAAAAAAAAAA16 /* DiskUsage */,
+				AAAAAAAAAAAAAAAAAAAAAA03 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AAAAAAAAAAAAAAAAAAAAAA03 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AAAAAAAAAAAAAAAAAAAAAA04 /* DiskUsage.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AAAAAAAAAAAAAAAAAAAAAA16 /* DiskUsage */ = {
+			isa = PBXGroup;
+			children = (
+				BBBBBBBBBBBBBBBBBBBBBB01 /* DiskUsageApp.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB02 /* ContentView.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB07 /* ExplorerViewModel.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB03 /* Node.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB04 /* ScanOptions.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB05 /* DiskUsageProcess.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB06 /* BinaryLocator.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB08 /* MeterBar.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB09 /* MarksPanel.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB10 /* ScanOptionsSheet.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB11 /* KeyboardShortcutsSheet.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB12 /* Formatting.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB14 /* MeasureHelp.swift */,
+				BBBBBBBBBBBBBBBBBBBBBB13 /* AppIcon.icon */,
+			);
+			path = DiskUsage;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AAAAAAAAAAAAAAAAAAAAAA05 /* DiskUsage */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AAAAAAAAAAAAAAAAAAAAAA13 /* Build configuration list for PBXNativeTarget "DiskUsage" */;
+			buildPhases = (
+				AAAAAAAAAAAAAAAAAAAAAA06 /* Sources */,
+				AAAAAAAAAAAAAAAAAAAAAA07 /* Frameworks */,
+				AAAAAAAAAAAAAAAAAAAAAA08 /* Resources */,
+				AAAAAAAAAAAAAAAAAAAAAA09 /* Build diskusage CLI */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DiskUsage;
+			productName = DiskUsage;
+			productReference = AAAAAAAAAAAAAAAAAAAAAA04 /* DiskUsage.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AAAAAAAAAAAAAAAAAAAAAA01 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					AAAAAAAAAAAAAAAAAAAAAA05 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = AAAAAAAAAAAAAAAAAAAAAA10 /* Build configuration list for PBXProject "DiskUsage" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AAAAAAAAAAAAAAAAAAAAAA02;
+			productRefGroup = AAAAAAAAAAAAAAAAAAAAAA03 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AAAAAAAAAAAAAAAAAAAAAA05 /* DiskUsage */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AAAAAAAAAAAAAAAAAAAAAA08 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CCCCCCCCCCCCCCCCCCCCCC13 /* AppIcon.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AAAAAAAAAAAAAAAAAAAAAA09 /* Build diskusage CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build diskusage CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/diskusage",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Scripts/build-diskusage.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AAAAAAAAAAAAAAAAAAAAAA06 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CCCCCCCCCCCCCCCCCCCCCC01 /* DiskUsageApp.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC02 /* ContentView.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC07 /* ExplorerViewModel.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC03 /* Node.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC04 /* ScanOptions.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC05 /* DiskUsageProcess.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC06 /* BinaryLocator.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC08 /* MeterBar.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC09 /* MarksPanel.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC10 /* ScanOptionsSheet.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC11 /* KeyboardShortcutsSheet.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC12 /* Formatting.swift in Sources */,
+				CCCCCCCCCCCCCCCCCCCCCC14 /* MeasureHelp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AAAAAAAAAAAAAAAAAAAAAA11 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AAAAAAAAAAAAAAAAAAAAAA12 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AAAAAAAAAAAAAAAAAAAAAA14 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.henvic.diskusage.gui";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AAAAAAAAAAAAAAAAAAAAAA15 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.henvic.diskusage.gui";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AAAAAAAAAAAAAAAAAAAAAA10 /* Build configuration list for PBXProject "DiskUsage" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AAAAAAAAAAAAAAAAAAAAAA11 /* Debug */,
+				AAAAAAAAAAAAAAAAAAAAAA12 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AAAAAAAAAAAAAAAAAAAAAA13 /* Build configuration list for PBXNativeTarget "DiskUsage" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AAAAAAAAAAAAAAAAAAAAAA14 /* Debug */,
+				AAAAAAAAAAAAAAAAAAAAAA15 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AAAAAAAAAAAAAAAAAAAAAA01 /* Project object */;
+}

@@ -17,12 +17,12 @@ jobs:
     # The app's "Build diskusage CLI" phase compiles the Go module into the
     # app bundle, so the build needs Go too.
     - name: Set up Go 1.x
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7
       with:
         go-version: "1.27.x"
 
     - name: Check out code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
 
     # The app icon is an Icon Composer document, which needs Xcode 26 or later.
     - name: Show Xcode version

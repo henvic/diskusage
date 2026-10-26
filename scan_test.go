@@ -175,10 +175,13 @@ func writeFile(t *testing.T, path string, n int) {
 }
 
 // TestBothSizes checks every node carries both measures: the apparent size is
-// the exact byte count and the on-disk size comes in whole 512-byte blocks.
+// the exact byte count, and the on-disk size comes in whole 512-byte blocks
+// where the platform reports them (Unix), or equals the apparent size where it
+// does not (Windows).
 func TestBothSizes(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "f"), 1000)
+	path := filepath.Join(dir, "f")
+	writeFile(t, path, 1000)
 	root, err := scan(dir, &scanner{})
 	if err != nil {
 		t.Fatal(err)
@@ -187,8 +190,16 @@ func TestBothSizes(t *testing.T) {
 	if f.Apparent != 1000 || f.ApparentSelf != 1000 {
 		t.Errorf("apparent = %d/%d, want 1000", f.Apparent, f.ApparentSelf)
 	}
-	if f.Size%512 != 0 || f.Size != f.Self {
-		t.Errorf("on-disk size = %d/%d, want whole blocks", f.Size, f.Self)
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, blocks := diskUsage(info); blocks {
+		if f.Size%512 != 0 || f.Size != f.Self {
+			t.Errorf("on-disk size = %d/%d, want whole blocks", f.Size, f.Self)
+		}
+	} else if f.Size != f.Apparent || f.Self != f.ApparentSelf {
+		t.Errorf("without block counts, on-disk size = %d/%d, want the apparent %d", f.Size, f.Self, f.Apparent)
 	}
 	if root.Apparent != root.ApparentSelf+1000 {
 		t.Errorf("root apparent = %d, want self %d + 1000", root.Apparent, root.ApparentSelf)

@@ -30,6 +30,9 @@ jobs:
       uses: actions/checkout@v6
 
     - name: Test
+      # bash on every OS: Windows' default PowerShell splits
+      # -coverprofile=profile.cov at the dot and passes ".cov" as a package.
+      shell: bash
       run: go test -race -covermode atomic -coverprofile=profile.cov ./...
 
     - name: Code coverage

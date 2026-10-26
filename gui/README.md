@@ -3,6 +3,8 @@
 A native SwiftUI front end for `diskusage`. It shows the same drill-in/drill-out
 explorer as the terminal UI, in a Mac window.
 
+https://github.com/user-attachments/assets/4c2b0ca4-3214-43c4-a597-4fd574d9759f
+
 > [!WARNING]
 > Like the rest of this repository, this app is mostly AI generated.
 

@@ -149,6 +149,8 @@ diskusage --json . | jq '.children[0]'
 [`gui/`](gui/) has a native SwiftUI version of the explorer, built on top of
 this CLI. See [gui/README.md](gui/README.md).
 
+https://github.com/user-attachments/assets/4c2b0ca4-3214-43c4-a597-4fd574d9759f
+
 ## Notes
 
 - The whole tree is held in memory (like `ncdu`); on huge filesystems use `-x`,

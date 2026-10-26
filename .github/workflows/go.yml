@@ -27,7 +27,7 @@ jobs:
         go-version: ${{ matrix.go }}
 
     - name: Check out code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
 
     - name: Test
       run: go test -race -covermode atomic -coverprofile=profile.cov ./...

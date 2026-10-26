@@ -84,7 +84,7 @@ func scan(root string, s *scanner) (*Node, error) {
 // snapshot, which pauses the walk for the duration of the copy.
 func scanStart(root string, s *scanner) (*Node, <-chan struct{}, error) {
 	// Follow the root itself even without -L: the user named it explicitly.
-	info, err := os.Stat(root)
+	info, err := os.Stat(root) // #nosec G703 -- reading user-chosen paths is the point of the tool
 	if err != nil {
 		return nil, nil, err
 	}
@@ -178,7 +178,7 @@ func (s *scanner) fill(n *Node, path string, dev uint64) {
 		// Without -L a symlink falls through to the leaf case below and is
 		// listed as an entry of its own size, never its target's.
 		if ci.Mode()&fs.ModeSymlink != 0 && s.follow {
-			ti, err := os.Stat(childPath)
+			ti, err := os.Stat(childPath) // #nosec G703 -- an entry of the tree being scanned
 			if err != nil {
 				continue // dangling link; nothing to measure
 			}

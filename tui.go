@@ -818,9 +818,9 @@ func copyToClipboard(text string) error {
 func openPath(path string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", path).Run()
+		return exec.Command("open", path).Run() // #nosec G204 -- fixed program, no shell; path is absolute, so never an option
 	default: // Linux, the BSDs, and other Unixes with a freedesktop desktop
-		return exec.Command("xdg-open", path).Run()
+		return exec.Command("xdg-open", path).Run() // #nosec G204 -- fixed program, no shell; path is absolute, so never an option
 	}
 }
 
@@ -1515,7 +1515,7 @@ func sttyState(tty *os.File) (string, error) {
 
 // stty runs stty against the terminal with the given arguments.
 func stty(tty *os.File, args ...string) error {
-	cmd := exec.Command("stty", args...)
+	cmd := exec.Command("stty", args...) // #nosec G204 -- fixed program, no shell; args are fixed flags or the state stty -g printed
 	cmd.Stdin = tty
 	cmd.Stdout = tty
 	cmd.Stderr = tty

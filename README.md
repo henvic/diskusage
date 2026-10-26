@@ -6,22 +6,16 @@ path, so you can decide what to clean up. Think `du` with sorting, bars, and an
 interactive explorer that opens by default — using only the Go standard library,
 no dependencies.
 
-[![diskusage exploring /Applications](https://asciinema.org/a/uqbcxgkfIQX2Hp1w.svg)](https://asciinema.org/a/uqbcxgkfIQX2Hp1w)
+[![diskusage exploring /Applications](https://github.com/user-attachments/assets/1631a56b-93fe-4ef4-a289-2f3b3fbffa9c)](https://asciinema.org/a/uqbcxgkfIQX2Hp1w)
 
 > [!WARNING]
 > Most of the code here is AI generated. It has been verified to work
 > correctly, but it is not human handcrafted.
 
-## Build
+## Install
 
 ```sh
-go build -o diskusage
-```
-
-Or run without installing:
-
-```sh
-go run . [flags] [path]
+go install github.com/henvic/diskusage@latest
 ```
 
 ## Usage
